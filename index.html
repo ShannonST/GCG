@@ -112,7 +112,7 @@ nav.tabs .scanbtn span.c{width:48px;height:48px;border-radius:16px;background:va
   <div class="bar">
     <button class="btn ghost" id="camClose" style="background:#0008;color:#fff;border-color:#fff6">Cancel</button>
     <button class="shutter" id="shutter" aria-label="Take photo"></button>
-    <label class="btn ghost" style="background:#0008;color:#fff;border-color:#fff6;display:inline-flex;align-items:center">Photo<input type="file" accept="image/*" id="camPick" hidden></label>
+    <label class="btn ghost" style="background:#0008;color:#fff;border-color:#fff6;display:inline-flex;align-items:center">Photo<input type="file" accept="image/*" id="camPick" hidden></label><input type="file" accept="image/*" capture="environment" id="camShoot" hidden>
   </div>
 </div>
 
@@ -184,7 +184,7 @@ function rebuildCatalog() { CATALOG = {}; SEED.forEach(c => CATALOG[c.num] = c);
 const info = num => CATALOG[num] || { num, name: num, colour: '', type: '', lv: null, cost: null, rarity: '', link: '', vanilla: false };
 
 // ---------- Collection maths ----------
-const keyOf = (num, collector) => num + (collector ? '+' : '');
+const keyOf = (num, collector, art = '') => num + (collector ? '+' + (art || '') : '');
 function ownedByNum(num, incoming = S.settings.includeIncoming) {
   let n = 0; for (const c of Object.values(S.cards)) if (c.num === num) n += (c.owned || 0) + (incoming ? (c.incoming || 0) : 0); return n;
 }
@@ -199,8 +199,11 @@ function priceOf(num) { const c = Object.values(S.cards).find(x => x.num === num
 // ---------- Images ----------
 const photoURLs = {};
 async function photoURL(id) { if (!id) return null; if (photoURLs[id]) return photoURLs[id]; const b = await DB.get('photos', id); if (!b) return null; return photoURLs[id] = URL.createObjectURL(b); }
-function officialURL(num) { return `https://www.gundam-gcg.com/en/images/cards/card/${encodeURIComponent(num)}.webp`; }
-function backupURL(num) { const pid = CATALOG[num]?.pid; return pid ? `https://tcgplayer-cdn.tcgplayer.com/product/${pid}_200w.jpg` : null; }
+// Card pictures come from TCGplayer's image server. (Bandai's own site blocks its images from showing inside other sites.)
+// A picture reference is a card number, or "number@productId" for a particular printing such as an alt art.
+function officialURL(ref) { const [num, pid0] = String(ref).split('@'); const pid = pid0 || CATALOG[num]?.pid;
+  return pid ? `https://tcgplayer-cdn.tcgplayer.com/product/${pid}_400w.jpg` : `https://www.gundam-gcg.com/en/images/cards/card/${encodeURIComponent(num)}.webp`; }
+function backupURL(ref) { const num = String(ref).split('@')[0]; return `https://www.gundam-gcg.com/en/images/cards/card/${encodeURIComponent(num)}.webp`; }
 async function hydrateImages(root) {
   for (const el of root.querySelectorAll('[data-photo],[data-official]')) {
     const id = el.dataset.photo; let src = id ? await photoURL(id) : null;
@@ -214,10 +217,10 @@ async function hydrateImages(root) {
     img.src = src;
   }
 }
-function tileHTML({ num, name, qty, need, collector, photo, onclick, small }) {
+function tileHTML({ num, name, qty, need, collector, art, photo, onclick, small }) {
   const i = info(num);
   return `<button class="tile ${need ? 'missing' : ''}" data-act="${esc(onclick || '')}" data-num="${esc(num)}">
-    <div class="img" style="background:${colourVar(i.colour)}" ${photo ? `data-photo="${esc(photo)}"` : ''} data-official="${esc(num)}">
+    <div class="img" style="background:${colourVar(i.colour)}" ${photo ? `data-photo="${esc(photo)}"` : ''} data-official="${esc(num + (art ? '@' + art : ''))}">
       <div class="ph">${esc(i.lv != null ? 'Lv' + i.lv : (i.type || ''))}</div>
       ${qty != null ? `<span class="qty">${qty}</span>` : ''}
       ${collector ? '<span class="plus">+</span>' : ''}
@@ -254,7 +257,7 @@ function renderCollection() {
     <input type="search" id="q" placeholder="Search name or number" value="${esc(FILTER.q)}" aria-label="Search cards">
     <div class="chips" style="margin-top:8px">${['', ...COLOURS].map(c => `<button class="chip ${FILTER.colour === c ? 'on' : ''}" data-col="${c}">${c ? c[0].toUpperCase() + c.slice(1) : 'All'}</button>`).join('')}</div>
   </div>
-  <div class="wrap">${all.length ? (rows.length ? `<div class="grid">${rows.map(([k, c]) => tileHTML({ num: c.num, qty: c.owned ? (c.incoming ? `${c.owned}+${c.incoming}` : c.owned) : `+${c.incoming}`, collector: c.collector, photo: c.photo, onclick: 'card:' + k })).join('')}</div>` : '<p class="empty">No cards match.</p>')
+  <div class="wrap">${all.length ? (rows.length ? `<div class="grid">${rows.map(([k, c]) => tileHTML({ num: c.num, qty: c.owned ? (c.incoming ? `${c.owned}+${c.incoming}` : c.owned) : `+${c.incoming}`, collector: c.collector, art: c.art, photo: c.photo, onclick: 'card:' + k })).join('')}</div>` : '<p class="empty">No cards match.</p>')
       : `<div class="empty"><b>Your collection is empty</b>Tap the scan button below to add your first card, or add one by hand.<br><br><button class="btn" data-act="add">Add a card by hand</button></div>`}</div>`;
   $('#q').oninput = e => { FILTER.q = e.target.value; const pos = e.target.selectionStart; renderCollection(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
   document.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { FILTER.colour = b.dataset.col; renderCollection(); });
@@ -278,7 +281,7 @@ function openCard(key) {
   const p = c.price;
   openSheet(`
     <div class="row" style="align-items:flex-start;gap:12px">
-      <div style="width:110px;flex:none">${tileHTML({ num: c.num, collector: c.collector, photo: c.photo, small: false })}</div>
+      <div style="width:110px;flex:none">${tileHTML({ num: c.num, collector: c.collector, art: c.art, photo: c.photo, small: false })}</div>
       <div class="grow"><h3>${esc(i.name)}</h3>
         <div class="small muted">${esc(c.num)} · ${esc(i.colour || 'colour?')} · ${esc(i.type || 'type?')}${i.lv != null ? ' · Lv' + i.lv : ''}${i.cost != null ? ' · Cost ' + i.cost : ''}${i.ap != null ? ` · ${i.ap}/${i.hp}` : ''}${c.rarity ? ' · ' + esc(c.rarity) : ''}</div>
         ${i.link ? `<div class="small muted">Links with ${esc(i.link)}</div>` : ''}${i.trait ? `<div class="small muted">${esc(i.trait)}</div>` : ''}
@@ -319,7 +322,7 @@ function openCard(key) {
       Object.assign(c, tmp, { pricePaid: $('#paid').value === '' ? null : +$('#paid').value, rarity: $('#rar').value.trim(), sleeved: $('#slv').checked, notes: $('#notes').value.trim() });
       if (!c.owned && !c.incoming) { delete S.cards[key]; } save(); closeSheet(); render(); toast('Saved');
     };
-    $('#cEdit').onclick = () => openConfirm({ num: c.num, photo: c.photo, collector: c.collector, rarity: c.rarity, editKey: key });
+    $('#cEdit').onclick = () => openConfirm({ num: c.num, photo: c.photo, collector: c.collector, art: c.art, rarity: c.rarity, editKey: key });
     const del = $('#cDel'); del.onclick = () => { if (del.dataset.armed) { delete S.cards[key]; save(); closeSheet(); render(); toast('Deleted'); } else { del.dataset.armed = 1; del.textContent = 'Tap again'; setTimeout(() => { delete del.dataset.armed; del.textContent = 'Delete'; }, 3000); } };
     $('#shots').onchange = e => readSoldScreenshots([...e.target.files], c.num);
   });
@@ -331,47 +334,37 @@ function searchString(nums) { const base = nums.length > 1 ? `(${nums.join(',')}
 
 /* =========================== SCAN =========================== */
 let stream = null;
-async function startScan() {
+function startScan() { // the phone's own camera app takes far better photos than an in-app preview
+  openSheet(`<h3>Scan cards</h3><p class="small muted">One card or several in one photo. Lay them flat on a plain table, not touching, and fill the photo with them.</p>
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn grow" id="scCam">Take photo</button><button class="btn ghost grow" id="scGal">Choose from gallery</button></div>`, () => {
+    $('#scCam').onclick = () => { $('#camShoot').click(); }; $('#scGal').onclick = () => { $('#camPick').click(); };
+  });
+  loadOpenCV(); loadTesseract(); // start downloading helpers in the background
+}
+async function startLiveScan() {
   const cam = $('#cam'); cam.classList.add('on');
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 3840 }, height: { ideal: 2160 } }, audio: false });
     $('#video').srcObject = stream;
-    const track = stream.getVideoTracks()[0], caps = track.getCapabilities ? track.getCapabilities() : {};
-    if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
   } catch { toast('Camera not available — pick a photo instead', 3500); }
-  loadOpenCV(); loadTesseract(); // start downloading helpers in the background
 }
 function stopScan() { stream?.getTracks().forEach(t => t.stop()); stream = null; $('#cam').classList.remove('on'); }
 $('#camClose').onclick = stopScan;
 $('#shutter').onclick = async () => {
   const v = $('#video'); if (!v.videoWidth) return toast('Camera still starting…');
-  // Where the on-screen frame sits, as a fraction of the camera preview
-  const fr = $('.cam .frame').getBoundingClientRect(), vr = v.getBoundingClientRect();
-  const scale = Math.max(vr.width / v.videoWidth, vr.height / v.videoHeight);
-  const offX = (vr.width - v.videoWidth * scale) / 2, offY = (vr.height - v.videoHeight * scale) / 2;
-  const f = { x: (fr.left - vr.left - offX) / scale / v.videoWidth, y: (fr.top - vr.top - offY) / scale / v.videoHeight,
-              w: fr.width / scale / v.videoWidth, h: fr.height / scale / v.videoHeight };
   $('#shutter').disabled = true; $('#camHint') && ($('#camHint').textContent = 'Taking photo… hold still');
-  let src = null, sw, sh;
+  // Take a full-quality still and hand the WHOLE photo to the card finder (same as picking a photo from the gallery).
+  // Cropping to the on-screen frame first could cut the card's edges off, so we don't.
+  let cv0 = null;
   try {
-    if ('ImageCapture' in window) { const blob = await new ImageCapture(stream.getVideoTracks()[0]).takePhoto(); src = await fileToCanvas(blob, 4000); }
+    if ('ImageCapture' in window) { const blob = await new ImageCapture(stream.getVideoTracks()[0]).takePhoto(); cv0 = await fileToCanvas(blob, 3000); }
   } catch (e) { console.warn('still photo failed', e); }
-  let fx = f.x, fy = f.y, fw = f.w, fh = f.h;
-  if (src) {
-    sw = src.width; sh = src.height;
-    // The preview is a centred crop of the full photo: map the frame into photo coordinates
-    const ar = v.videoWidth / v.videoHeight, pr = sw / sh;
-    if (pr > ar) { const k = ar / pr; fx = 0.5 + (fx - 0.5) * k; fw *= k; } else if (pr < ar) { const k = pr / ar; fy = 0.5 + (fy - 0.5) * k; fh *= k; }
-  } else { src = v; sw = v.videoWidth; sh = v.videoHeight; }
-  const pad = 0.25; fx -= fw * pad; fy -= fh * pad; fw *= 1 + 2 * pad; fh *= 1 + 2 * pad;
-  fx = Math.max(0, fx); fy = Math.max(0, fy); fw = Math.min(1 - fx, fw); fh = Math.min(1 - fy, fh);
-  const x = fx * sw, y = fy * sh, w = fw * sw, h = fh * sh, k = Math.min(1, 3000 / Math.max(w, h));
-  const cv0 = document.createElement('canvas'); cv0.width = Math.round(w * k); cv0.height = Math.round(h * k);
-  cv0.getContext('2d', { willReadFrequently: true }).drawImage(src, x, y, w, h, 0, 0, cv0.width, cv0.height);
+  if (!cv0) { cv0 = document.createElement('canvas'); cv0.width = v.videoWidth; cv0.height = v.videoHeight; cv0.getContext('2d').drawImage(v, 0, 0); }
   $('#shutter').disabled = false;
   stopScan(); openCropper(cv0, true);
 };
-$('#camPick').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; stopScan(); openCropper(await fileToCanvas(f, 3000), false); };
+$('#camPick').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; stopScan(); closeSheet(); openCropper(await fileToCanvas(f, 3000), false); };
+$('#camShoot').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; closeSheet(); openCropper(await fileToCanvas(f, 3000), true); };
 async function fileToCanvas(file, maxSide) {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(async () => { const img = new Image(); img.src = URL.createObjectURL(file); await img.decode(); return img; });
   const s = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
@@ -422,8 +415,8 @@ async function detectCorners(canvas, status) {
     if (area < 0.03 || area > 0.92) return 0;
     return area * (1 - Math.min(1, Math.abs(ratio - CARD) * 2.5));
   };
-  let best = null, bestScore = 0;
-  const consider = pts => { const sc = judge(pts); if (sc > bestScore) { bestScore = sc; best = pts; } };
+  let best = null, bestScore = 0; const cands = [];
+  const consider = (pts, w = 1) => { const sc = judge(pts) * w; if (sc > 0) cands.push([sc, pts]); if (sc > bestScore) { bestScore = sc; best = pts; } };
   const findIn = (gray, lo, hi, k) => {
     const edges = new cv.Mat(), contours = new cv.MatVector(), hier = new cv.Mat(), kern = cv.Mat.ones(k, k, cv.CV_8U);
     try {
@@ -437,7 +430,7 @@ async function detectCorners(canvas, status) {
             if (ap.rows === 4 && cv.isContourConvex(ap)) { const q = []; for (let j = 0; j < 4; j++) q.push([ap.data32S[j * 2], ap.data32S[j * 2 + 1]]); consider(q); }
             ap.delete(); }
           const hull = new cv.Mat(); cv.convexHull(c, hull); const r = cv.minAreaRect(hull); hull.delete();
-          const rp = cv.RotatedRect.points(r).map(q => [q.x, q.y]); const sc = judge(rp); if (sc * 0.9 > bestScore) { bestScore = sc * 0.9; best = rp; }
+          consider(cv.RotatedRect.points(r).map(q => [q.x, q.y]), 0.9);
         }
         c.delete();
       }
@@ -453,8 +446,22 @@ async function detectCorners(canvas, status) {
     chans.forEach(m => m.delete());
   } catch (e) { console.warn(e); }
   finally { [src, planes].forEach(m => m && m.delete && m.delete()); }
-  if (!best && loose) best = loose;
-  return best ? { pts: orderCorners(best).map(([x, y]) => [x / ds, y / ds]), auto: true, score: bestScore } : { pts: fallback, auto: false };
+  if (loose && (!best || looseScore > bestScore * 1.8)) best = loose;
+  // every separate card: biggest first, drop shapes sitting inside one already kept (like the art box), keep same-size ones
+  const inside = (pt, poly) => { let c = false; for (let i = 0, j = 3; i < 4; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j]; if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) c = !c; } return c; };
+  const centre = q => [q.reduce((s, p) => s + p[0], 0) / 4, q.reduce((s, p) => s + p[1], 0) / 4];
+  const areaOf = q => 0.5 * Math.abs(q.reduce((s, p, i) => { const r = q[(i + 1) % 4]; return s + p[0] * r[1] - r[0] * p[1]; }, 0));
+  const kept = [];
+  for (const [, q0] of cands.sort((a, b) => areaOf(b[1]) - areaOf(a[1]))) {
+    const q = orderCorners(q0);
+    if (kept.some(k => inside(centre(q), k) || inside(centre(k), q))) continue;
+    kept.push(q);
+  }
+  const big = kept.length ? areaOf(kept[0]) : 0, up = q => q.map(([x, y]) => [x / ds, y / ds]);
+  const all = kept.filter(q => areaOf(q) >= big * 0.45).sort((a, b) => { const ca = centre(a), cb = centre(b); return Math.abs(ca[1] - cb[1]) > H * 0.15 ? ca[1] - cb[1] : ca[0] - cb[0]; });
+  if (best === loose && loose) return { pts: up(orderCorners(loose)), auto: true, all: [up(orderCorners(loose))] };
+  if (all.length) return { pts: up(all[0]), auto: true, all: all.map(up) };
+  return { pts: fallback, auto: false, all: [] };
 }
 function orderCorners(p) { // top-left, top-right, bottom-right, bottom-left
   const s = p.map(([x, y]) => x + y), d = p.map(([x, y]) => x - y);
@@ -489,15 +496,57 @@ async function finishScan(canvas, pts) {
   const read = await ocrCard(full);
   const blob = await lowQuality(full);
   const photo = 'p' + uid(); await DB.put('photos', photo, blob);
-  closeSheet(); openConfirm({ num: read.num, ocrName: read.name, photo, readOk: !!read.num, guess: !!read.num && !read.sure });
+  closeSheet(); openConfirm({ num: read.num, ocrName: read.name, photo, readOk: !!read.num, guess: !!read.num && !read.sure, alts: read.sure ? [] : read.alts });
   if (read.noReader) toast('Text reader didn’t download — check your internet and try again', 4000);
 }
+async function finishMulti(canvas, quads) {
+  const items = [];
+  for (let k = 0; k < quads.length; k++) {
+    $('#cropTitle').textContent = `Found ${quads.length} cards`; $('#cropMsg').textContent = `Reading card ${k + 1} of ${quads.length}…`;
+    const full = warp(canvas, orderCorners(quads[k]), 945, 1320);
+    const read = await ocrCard(full);
+    const photo = 'p' + uid(); await DB.put('photos', photo, await lowQuality(full));
+    items.push({ num: read.num || '', sure: !!read.sure, alts: read.sure ? [] : (read.alts || []), name: read.name, photo, on: true });
+  }
+  closeSheet(); openMultiReview(items);
+}
+function openMultiReview(items) {
+  const row = (it, k) => { const i = it.num && CATALOG[it.num] ? info(it.num) : null;
+    return `<div class="row" style="gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line, #2a2d38)">
+      <input type="checkbox" data-mon="${k}" ${it.on ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--accent)" aria-label="Include card ${k + 1}">
+      <div style="width:54px;flex:none"><div class="tile"><div class="img" data-photo="${esc(it.photo)}"><div class="ph">${k + 1}</div></div></div></div>
+      <div class="grow" style="min-width:0">
+        <input type="text" data-mnum="${k}" value="${esc(it.num)}" placeholder="Card number" autocapitalize="characters" list="numListM" style="padding:8px">
+        <div class="small ${!it.num ? 'warn' : it.sure ? 'muted' : 'warn'}" style="margin-top:3px">${i ? esc(i.name) + (it.sure ? '' : ' · check this') : it.num ? 'Not in card list' : 'Couldn’t read — type it'}</div>
+        ${!it.sure && it.alts && it.alts.length ? `<div class="small muted">Or: ${it.alts.map(a => `<button class="pill" data-malt="${k}:${esc(a)}" style="margin:2px">${esc(a)}</button>`).join('')}</div>` : ''}
+      </div>
+      <button class="btn ghost sm" data-medit="${k}">More</button></div>`; };
+  openSheet(`<h3>${items.length} cards found</h3><p class="small muted">Check each number against your cards. Untick any you don’t want. Tap More for alt art, rarity or on-the-way.</p>
+    <datalist id="numListM">${Object.values(CATALOG).map(c => `<option value="${esc(c.num)}">${esc(c.name)}</option>`).join('')}</datalist>
+    <div id="mList">${items.map(row).join('')}</div>
+    <div class="row" style="gap:8px;margin-top:14px"><button class="btn grow" id="mAdd">Add ticked cards</button><button class="btn ghost" id="mRetake">Retake</button></div>`, root => {
+    root.querySelectorAll('[data-mon]').forEach(c => c.onchange = () => { items[+c.dataset.mon].on = c.checked; });
+    root.querySelectorAll('[data-malt]').forEach(b => b.onclick = () => { const [k, n] = b.dataset.malt.split(':'); const it = items[+k]; it.alts = [it.num, ...it.alts.filter(x => x !== n)].filter(Boolean).slice(0, 3); it.num = n; openMultiReview(items); });
+    root.querySelectorAll('[data-mnum]').forEach(inp => inp.onchange = () => { const k = +inp.dataset.mnum; items[k].num = normNum(inp.value); items[k].sure = true; openMultiReview(items); });
+    root.querySelectorAll('[data-medit]').forEach(b => b.onclick = () => { const k = +b.dataset.medit, it = items[k];
+      items.splice(k, 1); multiPending = items; openConfirm({ num: it.num, ocrName: it.name, photo: it.photo, readOk: !!it.num, guess: !it.sure }); });
+    $('#mRetake').onclick = () => { closeSheet(); $('#camShoot').click(); };
+    $('#mAdd').onclick = () => {
+      const pick = items.filter(it => it.on);
+      if (pick.some(it => !it.num)) return toast('Type the number for every ticked card, or untick it');
+      for (const it of pick) { const key = keyOf(it.num, false), c = S.cards[key] || (S.cards[key] = { num: it.num, collector: false, owned: 0, incoming: 0, rarity: info(it.num).rarity || '', sleeved: false, notes: '' });
+        c.owned = (c.owned || 0) + 1; if (!c.photo) c.photo = it.photo; }
+      save(); closeSheet(); go('collection'); toast(`Added ${pick.length} card${pick.length === 1 ? '' : 's'}`);
+    };
+  });
+}
+let multiPending = null;
 async function openCropper(canvas, fromCamera, forceManual = false, startPts = null) {
   lastShot = { canvas, fromCamera };
   openSheet(`<h3 id="cropTitle">Finding the card…</h3><p class="small muted" id="cropMsg">Looking for the card edges…</p>
     <div class="editor" id="ed"></div>
     <div class="row" style="gap:8px;margin-top:10px" id="cropBtns"><button class="btn grow" id="cropOk">Looks good</button><button class="btn ghost" id="cropRetake">Retake</button></div>`);
-  $('#cropRetake').onclick = () => { closeSheet(); fromCamera ? startScan() : $('#camPick').click(); };
+  $('#cropRetake').onclick = () => { closeSheet(); fromCamera ? $('#camShoot').click() : $('#camPick').click(); };
   const found = startPts ? { pts: startPts, auto: true } : await detectCorners(canvas, m => { $('#cropMsg').textContent = m; });
   if (found.auto && !forceManual) { // found it — go straight on, no dragging needed
     $('#cropTitle').textContent = 'Reading the card…'; $('#cropMsg').textContent = window.Tesseract ? 'Found the card. Reading the number…' : 'Found the card. Downloading the text reader (first time only)…';
@@ -505,6 +554,7 @@ async function openCropper(canvas, fromCamera, forceManual = false, startPts = n
     const view = document.createElement('canvas'), sc = Math.min(1, 300 / canvas.width); view.width = canvas.width * sc; view.height = canvas.height * sc;
     const vc = view.getContext('2d'); vc.drawImage(canvas, 0, 0, view.width, view.height); vc.strokeStyle = '#A678F0'; vc.lineWidth = 3; vc.beginPath();
     found.pts.forEach(([x, y], i) => i ? vc.lineTo(x * sc, y * sc) : vc.moveTo(x * sc, y * sc)); vc.closePath(); vc.stroke(); $('#ed').appendChild(view);
+    if (found.all && found.all.length > 1) return finishMulti(canvas, found.all);
     lastShot.pts = found.pts; return finishScan(canvas, found.pts);
   }
   $('#cropTitle').textContent = 'Check the crop';
@@ -561,18 +611,21 @@ function bestWindow(target, text) { // smallest distance between target and any 
 }
 const numText = t => t.toUpperCase().replace(/[^A-Z0-9|)\]!$&]/g, '');
 const cleanName = t => t.toUpperCase().replace(/[^A-Z0-9]/g, '');
-function pickCard(readings, nameText) {
+function pickCard(readings, nameText, colour = '') {
   const rs = readings.map(numText).filter(x => x.length >= 4);
   const nameLines = nameText.split('\n').map(cleanName).filter(l => l.length >= 4);
   const scored = [];
   for (const [num, c] of Object.entries(CATALOG)) {
     const target = numText(num);
-    let score = (rs.length ? rs.reduce((t, r) => t + Math.min(3, bestWindow(target, r)), 0) / rs.length : 3) + Math.max(0, 7 - target.length) * 0.6;
+    // judge on the clearest reads: the best one counts most, plus the next two as a cross-check (noisy reads are ignored)
+    const ds = rs.map(r => Math.min(3, bestWindow(target, r))).sort((a, b) => a - b);
+    let score = (ds.length ? 0.6 * ds[0] + 0.4 * (ds.slice(0, 3).reduce((t, d) => t + d, 0) / Math.min(3, ds.length)) : 3) + Math.max(0, 7 - target.length) * 0.6;
     const nm = cleanName(c.name || '');
     if (nm.length >= 4 && nameLines.length) {
-      const sim = Math.max(...nameLines.map(l => 1 - (bestWindow(nm, l) + Math.max(0, l.length - nm.length - 3) * 0.3) / nm.length));
+      const sim = Math.max(...nameLines.map(l => 1 - (bestWindow(nm, l) + Math.max(0, l.length - nm.length - 3) * 0.6) / nm.length));
       if (sim >= 0.7) score -= (score >= 2.5 ? 1.5 : 0.5) * sim; // lean on the name when the number is unreadable
     }
+    if (colour && c.colour && c.colour !== colour) score += 0.6; // wrong colour for this card
     scored.push([score, num]);
   }
   scored.sort((a, b) => a[0] - b[0]);
@@ -581,6 +634,16 @@ function pickCard(readings, nameText) {
   if (s1 <= 1.2 && s2 - s1 >= 0.15) return { num: n1, sure: true };
   if (s1 <= 2.6) return { num: n1, sure: false }; // best guess — the confirm screen asks you to check it
   return { num: '', sure: false };
+}
+// The coloured band down the card's left side tells us its colour — used to rule out wrong guesses
+function cardColour(canvas) {
+  const x0 = Math.round(canvas.width * .025), w = Math.round(canvas.width * .05), y0 = Math.round(canvas.height * .25), h = Math.round(canvas.height * .35);
+  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(x0, y0, w, h).data;
+  let r = 0, g = 0, b = 0, n = 0; for (let i = 0; i < d.length; i += 16) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+  r /= n; g /= n; b /= n; const mx = Math.max(r, g, b), mn = Math.min(r, g, b), sat = mx ? (mx - mn) / mx : 0;
+  if (sat < 0.18) return mx > 150 ? 'white' : '';
+  let hue = mx === r ? 60 * (((g - b) / (mx - mn)) % 6) : mx === g ? 60 * ((b - r) / (mx - mn) + 2) : 60 * ((r - g) / (mx - mn) + 4); if (hue < 0) hue += 360;
+  return hue < 25 || hue >= 335 ? 'red' : hue < 75 ? '' : hue < 170 ? 'green' : hue < 250 ? 'blue' : 'purple';
 }
 async function ocrCard(canvas) {
   const w = await Promise.race([loadTesseract(), new Promise(r => setTimeout(() => r(null), 90000))]);
@@ -594,14 +657,15 @@ async function ocrCard(canvas) {
       const { data } = await w.recognize(region(canvas, ...r, sc, filter)); readings.push(data.text);
     }
     const { data: nd } = await w.recognize(region(canvas, .05, .45, .95, .88, 1, 'grayscale(1) contrast(1.4)'));
-    const pick = pickCard(readings, nd.text), num = pick.num; window.lastScan = { readings, nameText: nd.text, num, top: window.lastPick };
+    const col = cardColour(canvas); window.lastColour = col;
+    const pick = pickCard(readings, nd.text, col), num = pick.num; window.lastScan = { readings, nameText: nd.text, num, top: window.lastPick };
     const name = nd.text.split('\n').map(s => s.trim()).filter(s => /[A-Za-z]{3}/.test(s)).sort((a, b) => b.length - a.length)[0] || '';
-    return { num, sure: pick.sure, name: name.replace(/[^A-Za-z0-9 '()&.\-]/g, '').trim() };
+    return { num, sure: pick.sure, alts: (window.lastPick || []).map(x => x[1]).filter(n => n !== num).slice(0, 3), name: name.replace(/[^A-Za-z0-9 '()&.\-]/g, '').trim() };
   } catch (e) { console.warn(e); return { num: '', name: '' }; }
 }
 
 // ---------- Confirm sheet (after scanning, or adding by hand) ----------
-function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, guess = false, manual = false, collector = false, rarity = '', editKey = null }) {
+function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, guess = false, alts = [], manual = false, collector = false, art = '', rarity = '', editKey = null }) {
   num = normNum(num); const known = num && CATALOG[num]; const i = known ? info(num) : { name: ocrName, colour: '', type: '', lv: '', cost: '', rarity: '', link: '' };
   const have = num ? ownedByNum(num, false) : 0;
   const title = editKey ? 'Edit card' : manual ? 'Add a card' : (readOk ? (guess ? 'Best guess — check it' : 'Is this right?') : 'Couldn’t read the number');
@@ -609,8 +673,9 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
     ${!manual && !editKey ? `<p class="small ${readOk ? 'ok' : 'warn'}">${readOk ? `${guess ? 'Not sure — compare with your card' : 'Read from photo'}: <b>${esc(num)}</b>${known ? '' : ' · new card, check the details'}` : 'Type the card number from the top corner of the card.'}</p>` : ''}
     <div class="row" style="gap:10px;align-items:flex-start">
       ${photo || num ? `<div style="width:96px;flex:none">${photo ? `<div class="tile"><div class="img" data-photo="${esc(photo)}"><div class="ph">Your photo</div></div><div class="no">Your copy</div></div>` : ''}</div>` : ''}
-      ${num && S.settings.officialImages ? `<div style="width:96px;flex:none"><div class="tile"><div class="img" style="background:${colourVar(i.colour)}" data-official="${esc(num)}"><div class="ph">Official</div></div><div class="no">Official</div></div></div>` : ''}
+      ${num && S.settings.officialImages ? `<div style="width:96px;flex:none"><div class="tile"><div class="img" style="background:${colourVar(i.colour)}" data-official="${esc(num + (collector && art ? '@' + art : ''))}" id="offImg"><div class="ph">Official</div></div><div class="no">Official</div></div></div>` : ''}
     </div>
+    ${alts && alts.length ? `<p class="small muted" style="margin:8px 0 0">Or is it: ${alts.map(a => `<button class="pill" data-alt="${esc(a)}" style="margin:2px">${esc(a)} ${esc(info(a).name || '')}</button>`).join('')}</p>` : ''}
     <label class="f" for="fNum">Card number</label><input type="text" id="fNum" value="${esc(num)}" placeholder="GD05-002" autocapitalize="characters" list="numList">
     <datalist id="numList">${Object.values(CATALOG).map(c => `<option value="${esc(c.num)}">${esc(c.name)}</option>`).join('')}</datalist>
     <label class="f" for="fName">Name</label><input type="text" id="fName" value="${esc(i.name)}">
@@ -627,15 +692,36 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
     <label class="f" style="margin-top:12px"><input type="checkbox" id="fVan" ${i.vanilla ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Plain Lv2 / cost 1 / 2-2 unit with no effect</label>
     <label class="f">Version</label>
     <div class="seg" id="fVer"><button data-v="0" class="${collector ? '' : 'on'}">Normal</button><button data-v="1" class="${collector ? 'on' : ''}">Collector (+ / alt art)</button></div>
+    <div id="artBox" style="${collector ? '' : 'display:none'}"><label class="f">Which printing? <span class="small muted">(tap the one that matches your card)</span></label><div id="artList" class="row" style="gap:8px;overflow-x:auto;padding-bottom:6px"></div></div>
     ${editKey ? '' : `<div class="row" style="justify-content:space-between;margin-top:12px"><span>How many? <span class="small muted" id="haveNote">${have ? `(you have ${have})` : ''}</span></span>
       <div class="stepper"><button id="qm" aria-label="One fewer">−</button><span id="qv">1</span><button id="qp" aria-label="One more">+</button></div></div>
       <label class="f"><input type="checkbox" id="fInc" style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> These are on the way (not arrived yet)</label>`}
     <div class="row" style="gap:8px;margin-top:16px"><button class="btn grow" id="fSave">${editKey ? 'Save changes' : 'Yes, add to collection'}</button>${!manual && !editKey ? '<button class="btn ghost" id="fFix">Fix crop</button><button class="btn ghost" id="fRetake">Retake</button>' : ''}</div>`, root => {
-    let qty = 1, coll = !!collector;
-    root.querySelectorAll('#fVer button').forEach(b => b.onclick = () => { coll = b.dataset.v === '1'; root.querySelectorAll('#fVer button').forEach(x => x.classList.toggle('on', x === b)); });
+    let qty = 1, coll = !!collector, artSel = art || '';
+    const setOfficial = () => { const o = $('#offImg'); if (!o) return; const n = normNum($('#fNum').value) || num; o.dataset.official = n + (coll && artSel ? '@' + artSel : ''); o.querySelector('img')?.remove(); hydrateImages(o.parentElement); };
+    const showArts = () => { // every printing of this card number: standard, +, ++, SP, promos…
+      const n = normNum($('#fNum').value), box = $('#artList'); box.innerHTML = '';
+      const c = CATALOG[n];
+      if (!c) { box.innerHTML = '<span class="small muted">Add a card number from the card list first</span>'; return; }
+      const opts = [['', 'Standard', c.usd], ...(c.alts || []).map(([pid, lab, pr]) => [String(pid), lab, pr])];
+      if (opts.length === 1) { box.innerHTML = '<span class="small muted">No other printings of this card in the card list yet</span>'; }
+      for (const [a, lab, pr] of opts) {
+        const b = document.createElement('button'); b.className = 'tile'; b.style.cssText = `width:84px;flex:none;outline:${a === artSel ? '3px solid var(--accent)' : 'none'};border-radius:8px;padding:2px`;
+        const img = new Image(); img.referrerPolicy = 'no-referrer'; img.style.cssText = 'width:100%;aspect-ratio:63/88;object-fit:cover;border-radius:6px;display:block;background:#222';
+        img.src = officialURL(n + (a ? '@' + a : ''));
+        const l = document.createElement('div'); l.className = 'no'; l.style.whiteSpace = 'normal'; l.textContent = lab + (pr ? ` · US$${pr < 100 ? pr.toFixed(2) : Math.round(pr)}` : '');
+        b.append(img, l); b.onclick = () => { artSel = a; box.querySelectorAll('button').forEach(x => x.style.outline = 'none'); b.style.outline = '3px solid var(--accent)'; setOfficial();
+          const r = $('#fRar'); const m = lab.match(/^(LR|R|U|C)\+*/); if (r && m) r.value = m[0]; };
+        box.appendChild(b);
+      }
+    };
+    root.querySelectorAll('#fVer button').forEach(b => b.onclick = () => { coll = b.dataset.v === '1'; root.querySelectorAll('#fVer button').forEach(x => x.classList.toggle('on', x === b));
+      $('#artBox').style.display = coll ? '' : 'none'; if (coll) showArts(); setOfficial(); });
+    if (coll) showArts();
     if (!editKey) { $('#qm').onclick = () => { qty = Math.max(1, qty - 1); $('#qv').textContent = qty; }; $('#qp').onclick = () => { qty++; $('#qv').textContent = qty; }; }
-    $('#fNum').onchange = () => { const n = normNum($('#fNum').value); $('#fNum').value = n; const k = CATALOG[n]; if (k) { $('#fName').value = k.name; $('#fCol').value = k.colour || ''; $('#fType').value = k.type || ''; $('#fLv').value = k.lv ?? ''; $('#fCost').value = k.cost ?? ''; $('#fLink').value = k.link || ''; $('#fVan').checked = !!k.vanilla; if (!$('#fRar').value) $('#fRar').value = k.rarity || ''; } const h = ownedByNum(n, false); const hn = $('#haveNote'); if (hn) hn.textContent = h ? `(you have ${h})` : ''; };
-    const rt = $('#fRetake'); if (rt) rt.onclick = () => { closeSheet(); startScan(); };
+    $('#fNum').onchange = () => { const n = normNum($('#fNum').value); $('#fNum').value = n; const k = CATALOG[n]; if (k) { $('#fName').value = k.name; $('#fCol').value = k.colour || ''; $('#fType').value = k.type || ''; $('#fLv').value = k.lv ?? ''; $('#fCost').value = k.cost ?? ''; $('#fLink').value = k.link || ''; $('#fVan').checked = !!k.vanilla; if (!$('#fRar').value) $('#fRar').value = k.rarity || ''; } const h = ownedByNum(n, false); const hn = $('#haveNote'); if (hn) hn.textContent = h ? `(you have ${h})` : ''; artSel = ''; if (coll) showArts(); };
+    root.querySelectorAll('[data-alt]').forEach(b => b.onclick = () => { $('#fNum').value = b.dataset.alt; $('#fNum').onchange(); root.querySelectorAll('[data-alt]').forEach(x => x.classList.toggle('ok', x === b)); });
+    const rt = $('#fRetake'); if (rt) rt.onclick = () => { closeSheet(); $('#camShoot').click(); };
     const fx = $('#fFix'); if (fx) { if (!lastShot || !photo) fx.remove(); else fx.onclick = () => { DB.del && DB.del('photos', photo); closeSheet(); openCropper(lastShot.canvas, lastShot.fromCamera, true, lastShot.pts); }; }
     $('#fSave').onclick = () => {
       const n = normNum($('#fNum').value), name = $('#fName').value.trim();
@@ -643,18 +729,19 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
       const lv = $('#fLv').value === '' ? null : +$('#fLv').value, cost = $('#fCost').value === '' ? null : +$('#fCost').value;
       S.learned[n] = { num: n, name: name || n, colour: $('#fCol').value, type: $('#fType').value, lv, cost, rarity: (CATALOG[n]?.rarity) || $('#fRar').value.trim().replace(/\+/g, ''), link: $('#fLink').value.trim(), vanilla: $('#fVan').checked };
       rebuildCatalog();
-      const rar = $('#fRar').value.trim(), key = keyOf(n, coll);
+      const rar = $('#fRar').value.trim(), art2 = coll ? artSel : '', key = keyOf(n, coll, art2);
       if (editKey) {
         const old = S.cards[editKey]; delete S.cards[editKey];
         const tgt = S.cards[key]; if (tgt && key !== editKey) { tgt.owned = (tgt.owned || 0) + (old.owned || 0); tgt.incoming = (tgt.incoming || 0) + (old.incoming || 0); }
-        else S.cards[key] = { ...old, num: n, collector: coll, rarity: rar };
+        else S.cards[key] = { ...old, num: n, collector: coll, art: art2, rarity: rar };
       } else {
-        const inc = $('#fInc').checked, c = S.cards[key] || (S.cards[key] = { num: n, collector: coll, owned: 0, incoming: 0, rarity: rar, sleeved: false, notes: '' });
+        const inc = $('#fInc').checked, c = S.cards[key] || (S.cards[key] = { num: n, collector: coll, art: art2, owned: 0, incoming: 0, rarity: rar, sleeved: false, notes: '' });
         if (inc) c.incoming = (c.incoming || 0) + qty;
         else { c.owned = (c.owned || 0) + qty; if (c.incoming) c.incoming = Math.max(0, c.incoming - qty); }
         if (photo && !c.photo) c.photo = photo; if (rar) c.rarity = rar;
       }
       save(); closeSheet(); go('collection'); toast(editKey ? 'Updated' : `Added ${qty} × ${name || n}`);
+      if (multiPending && multiPending.length) { const rest = multiPending; multiPending = null; openMultiReview(rest); } else multiPending = null;
     };
   });
 }
@@ -1009,7 +1096,7 @@ function renderMore() {
     <h2>Sleeves</h2>
     <div class="stats"><div class="stat"><b>${dsCount}</b><span class="small muted">double sleeve (all core cards)</span></div><div class="stat"><b>${coll.reduce((s, c) => s + c.owned, 0)}</b><span class="small muted">toploader (collector)</span></div><div class="stat"><b class="${notSleeved ? 'warn' : ''}">${notSleeved}</b><span class="small muted">core cards not marked sleeved</span></div></div>
     <p class="small muted">Every card in a deck needs identical sleeves, and your cores swap between decks, so use the same inner and outer sleeves on all core cards. Collector cards stay out of play.</p>
-    ${coll.length ? `<div class="grid">${coll.map(c => tileHTML({ num: c.num, qty: c.owned, collector: true, photo: c.photo, onclick: 'card:' + keyOf(c.num, true) })).join('')}</div>` : ''}
+    ${coll.length ? `<div class="grid">${coll.map(c => tileHTML({ num: c.num, qty: c.owned, collector: true, art: c.art, photo: c.photo, onclick: 'card:' + keyOf(c.num, true, c.art) })).join('')}</div>` : ''}
     <h2>Spares for trading</h2>
     <p class="small muted">Cards you own beyond what your cores use${spareVal ? ` · rough value ${money(spareVal)}` : ''}.</p>
     ${spares.length ? `<div class="list">${spares.slice(0, 60).map(x => `<div class="li"><span class="dot" style="background:${colourVar(info(x.c.num).colour)}"></span><div class="grow"><div style="font-weight:600;font-size:14px">${esc(info(x.c.num).name)}</div><div class="small muted">${esc(x.c.num)}${x.c.price ? ` · ${money(x.c.price.median)} each` : ''}</div></div><b>×${x.spare}</b></div>`).join('')}</div>` : '<p class="small muted">No spares yet.</p>'}
@@ -1017,14 +1104,14 @@ function renderMore() {
     <p class="small muted">Saves everything (cards, cores, decks, prices and your photos) as one file. Share it to Gmail to email it to yourself.</p>
     <div class="row" style="gap:8px"><button class="btn grow" id="bk">Back up now</button><label class="btn ghost" style="display:inline-flex;align-items:center">Restore<input type="file" accept=".json,application/json" id="rs" hidden></label></div>
     <h2>Settings</h2>
-    <label class="f"><input type="checkbox" id="stOff" ${S.settings.officialImages ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show official card images when online (from Bandai's site, not saved)</label>
+    <label class="f"><input type="checkbox" id="stOff" ${S.settings.officialImages ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show official card pictures when online (from TCGplayer's image server, not saved)</label>
     <label class="f" for="stQ">Photo quality when scanning</label>
     <select id="stQ"><option value="low" ${S.settings.quality === 'low' ? 'selected' : ''}>Low (~20 KB a card)</option><option value="medium" ${S.settings.quality === 'medium' ? 'selected' : ''}>Medium (~60 KB)</option><option value="high" ${S.settings.quality === 'high' ? 'selected' : ''}>High (~150 KB)</option></select>
     <h2>Card list</h2>
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.3 (auto crop) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.4 (multi-card scan, alt art) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
