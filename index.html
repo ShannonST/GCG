@@ -108,7 +108,7 @@ nav.tabs .scanbtn span.c{width:48px;height:48px;border-radius:16px;background:va
 <div class="cam" id="cam">
   <video id="video" playsinline muted autoplay></video>
   <div class="frame"></div>
-  <div class="hint">Card flat on a table · fill the frame · no glare on the number</div>
+  <div class="hint" id="camHint">Card flat on a table · fill the frame · no glare on the number</div>
   <div class="bar">
     <button class="btn ghost" id="camClose" style="background:#0008;color:#fff;border-color:#fff6">Cancel</button>
     <button class="shutter" id="shutter" aria-label="Take photo"></button>
@@ -345,35 +345,33 @@ function stopScan() { stream?.getTracks().forEach(t => t.stop()); stream = null;
 $('#camClose').onclick = stopScan;
 $('#shutter').onclick = async () => {
   const v = $('#video'); if (!v.videoWidth) return toast('Camera still starting…');
-  // Work out where the on-screen frame sits, as a fraction of the camera picture
+  // Where the on-screen frame sits, as a fraction of the camera preview
   const fr = $('.cam .frame').getBoundingClientRect(), vr = v.getBoundingClientRect();
   const scale = Math.max(vr.width / v.videoWidth, vr.height / v.videoHeight);
   const offX = (vr.width - v.videoWidth * scale) / 2, offY = (vr.height - v.videoHeight * scale) / 2;
-  const pad = 0.1;
-  let fx = (fr.left - vr.left - offX) / scale / v.videoWidth, fy = (fr.top - vr.top - offY) / scale / v.videoHeight,
-      fw = fr.width / scale / v.videoWidth, fh = fr.height / scale / v.videoHeight;
-  fx -= fw * pad; fy -= fh * pad; fw *= 1 + 2 * pad; fh *= 1 + 2 * pad;
-  fx = Math.max(0, fx); fy = Math.max(0, fy); fw = Math.min(1 - fx, fw); fh = Math.min(1 - fy, fh);
-  $('#shutter').disabled = true;
-  // Prefer a proper still photo (sharper, uses autofocus) over a frame grabbed from the preview
+  const f = { x: (fr.left - vr.left - offX) / scale / v.videoWidth, y: (fr.top - vr.top - offY) / scale / v.videoHeight,
+              w: fr.width / scale / v.videoWidth, h: fr.height / scale / v.videoHeight };
+  $('#shutter').disabled = true; $('#camHint') && ($('#camHint').textContent = 'Taking photo… hold still');
   let src = null, sw, sh;
   try {
-    if ('ImageCapture' in window) {
-      const blob = await new ImageCapture(stream.getVideoTracks()[0]).takePhoto();
-      const c = await fileToCanvas(blob, 2400);
-      // only trust the frame position if the photo has the same shape as the preview
-      if (Math.abs(c.width / c.height - v.videoWidth / v.videoHeight) < 0.05) { src = c; sw = c.width; sh = c.height; }
-      else { src = c; sw = c.width; sh = c.height; fx = 0; fy = 0; fw = 1; fh = 1; }
-    }
+    if ('ImageCapture' in window) { const blob = await new ImageCapture(stream.getVideoTracks()[0]).takePhoto(); src = await fileToCanvas(blob, 4000); }
   } catch (e) { console.warn('still photo failed', e); }
-  if (!src) { src = v; sw = v.videoWidth; sh = v.videoHeight; }
-  const x = fx * sw, y = fy * sh, w = fw * sw, h = fh * sh, k = Math.min(1, 1600 / Math.max(w, h));
+  let fx = f.x, fy = f.y, fw = f.w, fh = f.h;
+  if (src) {
+    sw = src.width; sh = src.height;
+    // The preview is a centred crop of the full photo: map the frame into photo coordinates
+    const ar = v.videoWidth / v.videoHeight, pr = sw / sh;
+    if (pr > ar) { const k = ar / pr; fx = 0.5 + (fx - 0.5) * k; fw *= k; } else if (pr < ar) { const k = pr / ar; fy = 0.5 + (fy - 0.5) * k; fh *= k; }
+  } else { src = v; sw = v.videoWidth; sh = v.videoHeight; }
+  const pad = 0.25; fx -= fw * pad; fy -= fh * pad; fw *= 1 + 2 * pad; fh *= 1 + 2 * pad;
+  fx = Math.max(0, fx); fy = Math.max(0, fy); fw = Math.min(1 - fx, fw); fh = Math.min(1 - fy, fh);
+  const x = fx * sw, y = fy * sh, w = fw * sw, h = fh * sh, k = Math.min(1, 3000 / Math.max(w, h));
   const cv0 = document.createElement('canvas'); cv0.width = Math.round(w * k); cv0.height = Math.round(h * k);
-  cv0.getContext('2d').drawImage(src, x, y, w, h, 0, 0, cv0.width, cv0.height);
+  cv0.getContext('2d', { willReadFrequently: true }).drawImage(src, x, y, w, h, 0, 0, cv0.width, cv0.height);
   $('#shutter').disabled = false;
   stopScan(); openCropper(cv0, true);
 };
-$('#camPick').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; stopScan(); openCropper(await fileToCanvas(f, 1600), false); };
+$('#camPick').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; stopScan(); openCropper(await fileToCanvas(f, 3000), false); };
 async function fileToCanvas(file, maxSide) {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(async () => { const img = new Image(); img.src = URL.createObjectURL(file); await img.decode(); return img; });
   const s = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
@@ -401,44 +399,62 @@ function loadTesseract() {
 
 // --- find the card's four corners (OpenCV), else use the frame ---
 async function detectCorners(canvas, status) {
-  const W = canvas.width, H = canvas.height;
-  const fallback = [[W * .07, H * .07], [W * .93, H * .07], [W * .93, H * .93], [W * .07, H * .93]];
+  const W0 = canvas.width, H0 = canvas.height;
+  const fallback = [[W0 * .07, H0 * .07], [W0 * .93, H0 * .07], [W0 * .93, H0 * .93], [W0 * .07, H0 * .93]];
   if (!(window.cv && cv.Mat) && status) status('Downloading the edge finder (first time only, about 10 MB)…');
   const ok = await Promise.race([loadOpenCV(), new Promise(r => setTimeout(() => r(false), 60000))]);
   if (!ok || !window.cv || !cv.Mat) return { pts: fallback, auto: false };
-  const findIn = (gray, lo, hi) => {
-    const edges = new cv.Mat(), contours = new cv.MatVector(), hier = new cv.Mat();
-    try {
-      cv.Canny(gray, edges, lo, hi); cv.dilate(edges, edges, cv.Mat.ones(5, 5, cv.CV_8U));
-      cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-      let best = null, bestA = W * H * 0.12, rect = null, rectA = W * H * 0.12;
-      for (let i = 0; i < contours.size(); i++) {
-        const c = contours.get(i), peri = cv.arcLength(c, true), ap = new cv.Mat();
-        cv.approxPolyDP(c, ap, 0.02 * peri, true);
-        const a = cv.contourArea(ap);
-        if (ap.rows === 4 && a > bestA && a < W * H * 0.97 && cv.isContourConvex(ap)) { bestA = a; best = []; for (let j = 0; j < 4; j++) best.push([ap.data32S[j * 2], ap.data32S[j * 2 + 1]]); }
-        // backup: tightest rotated box around a big card-shaped outline (helps with sleeves and rounded corners)
-        const ca = cv.contourArea(c);
-        if (ca > rectA && ca < W * H * 0.97) { const r = cv.minAreaRect(c), ratio = Math.max(r.size.width, r.size.height) / Math.max(1, Math.min(r.size.width, r.size.height));
-          if (ratio > 1.2 && ratio < 1.6) { rectA = ca; rect = cv.RotatedRect.points(r).map(q => [q.x, q.y]); } }
-        ap.delete(); c.delete();
-      }
-      return best || rect;
-    } finally { edges.delete(); contours.delete(); hier.delete(); }
+  // find edges on a small copy (faster and less fussy), then scale the corners back up
+  const ds = Math.min(1, 900 / Math.max(W0, H0)), small = document.createElement('canvas');
+  small.width = Math.round(W0 * ds); small.height = Math.round(H0 * ds); small.getContext('2d').drawImage(canvas, 0, 0, small.width, small.height);
+  const W = small.width, H = small.height, margin = Math.max(W, H) * 0.012;
+  const CARD = 88 / 63;
+  let loose = null, looseScore = 0;
+  const judge = (pts, strict = true) => { // how card-like is this four-sided shape? 0 = not at all
+    if (strict && pts.some(([x, y]) => x < margin || y < margin || x > W - margin || y > H - margin)) { // touching the photo edge: only a last resort
+      const sc = judge(pts, false); if (sc > looseScore && sc > 0.35) { looseScore = sc; loose = pts; } return 0; }
+    const o = orderCorners(pts), d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const top = d(o[0], o[1]), bot = d(o[3], o[2]), lef = d(o[0], o[3]), rig = d(o[1], o[2]);
+    if (Math.min(top, bot) / Math.max(top, bot) < 0.7 || Math.min(lef, rig) / Math.max(lef, rig) < 0.7) return 0; // too skewed
+    const ratio = Math.max(top + bot, lef + rig) / Math.min(top + bot, lef + rig);
+    if (ratio < 1.15 || ratio > 1.7) return 0;
+    const area = 0.5 * Math.abs(o.reduce((s, p, i) => { const q = o[(i + 1) % 4]; return s + p[0] * q[1] - q[0] * p[1]; }, 0)) / (W * H);
+    if (area < 0.03 || area > 0.92) return 0;
+    return area * (1 - Math.min(1, Math.abs(ratio - CARD) * 2.5));
   };
-  let src, planes, small;
+  let best = null, bestScore = 0;
+  const consider = pts => { const sc = judge(pts); if (sc > bestScore) { bestScore = sc; best = pts; } };
+  const findIn = (gray, lo, hi, k) => {
+    const edges = new cv.Mat(), contours = new cv.MatVector(), hier = new cv.Mat(), kern = cv.Mat.ones(k, k, cv.CV_8U);
+    try {
+      cv.Canny(gray, edges, lo, hi); cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kern);
+      cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      for (let i = 0; i < contours.size(); i++) {
+        const c = contours.get(i);
+        if (cv.contourArea(c) > W * H * 0.02) {
+          const peri = cv.arcLength(c, true);
+          for (const eps of [0.02, 0.035]) { const ap = new cv.Mat(); cv.approxPolyDP(c, ap, eps * peri, true);
+            if (ap.rows === 4 && cv.isContourConvex(ap)) { const q = []; for (let j = 0; j < 4; j++) q.push([ap.data32S[j * 2], ap.data32S[j * 2 + 1]]); consider(q); }
+            ap.delete(); }
+          const hull = new cv.Mat(); cv.convexHull(c, hull); const r = cv.minAreaRect(hull); hull.delete();
+          const rp = cv.RotatedRect.points(r).map(q => [q.x, q.y]); const sc = judge(rp); if (sc * 0.9 > bestScore) { bestScore = sc * 0.9; best = rp; }
+        }
+        c.delete();
+      }
+    } finally { edges.delete(); contours.delete(); hier.delete(); kern.delete(); }
+  };
+  let src, planes;
   try {
-    src = cv.imread(canvas); planes = new cv.MatVector();
+    src = cv.imread(small); planes = new cv.MatVector(); cv.split(src, planes);
     const g = new cv.Mat(); cv.cvtColor(src, g, cv.COLOR_RGBA2GRAY);
-    cv.split(src, planes);
     const chans = [g, planes.get(0), planes.get(1), planes.get(2)];
     chans.forEach(m => cv.GaussianBlur(m, m, new cv.Size(5, 5), 0));
-    let found = null;
-    outer: for (const [lo, hi] of [[40, 120], [15, 50], [80, 200]]) for (const m of chans) { found = findIn(m, lo, hi); if (found) break outer; }
+    for (const [lo, hi] of [[30, 90], [60, 160], [15, 45]]) for (const m of chans) for (const k of [5, 9]) findIn(m, lo, hi, k);
     chans.forEach(m => m.delete());
-    return found ? { pts: orderCorners(found), auto: true } : { pts: fallback, auto: false };
-  } catch (e) { console.warn(e); return { pts: fallback, auto: false }; }
+  } catch (e) { console.warn(e); }
   finally { [src, planes].forEach(m => m && m.delete && m.delete()); }
+  if (!best && loose) best = loose;
+  return best ? { pts: orderCorners(best).map(([x, y]) => [x / ds, y / ds]), auto: true, score: bestScore } : { pts: fallback, auto: false };
 }
 function orderCorners(p) { // top-left, top-right, bottom-right, bottom-left
   const s = p.map(([x, y]) => x + y), d = p.map(([x, y]) => x - y);
@@ -466,18 +482,38 @@ function warp(canvas, pts, outW, outH) {
   octx.putImageData(od, 0, 0); return out;
 }
 
-// --- corner editor ---
-async function openCropper(canvas, fromCamera) {
-  openSheet(`<h3>Check the crop</h3><p class="small muted" id="cropMsg">Finding the card edges…</p>
+// --- corner editor (only shown if the card couldn't be found automatically, or you ask to fix it) ---
+let lastShot = null;
+async function finishScan(canvas, pts) {
+  const full = warp(canvas, orderCorners(pts), 945, 1320);
+  const read = await ocrCard(full);
+  const blob = await lowQuality(full);
+  const photo = 'p' + uid(); await DB.put('photos', photo, blob);
+  closeSheet(); openConfirm({ num: read.num, ocrName: read.name, photo, readOk: !!read.num, guess: !!read.num && !read.sure });
+  if (read.noReader) toast('Text reader didn’t download — check your internet and try again', 4000);
+}
+async function openCropper(canvas, fromCamera, forceManual = false, startPts = null) {
+  lastShot = { canvas, fromCamera };
+  openSheet(`<h3 id="cropTitle">Finding the card…</h3><p class="small muted" id="cropMsg">Looking for the card edges…</p>
     <div class="editor" id="ed"></div>
-    <div class="row" style="gap:8px;margin-top:10px"><button class="btn grow" id="cropOk">Looks good</button><button class="btn ghost" id="cropRetake">Retake</button></div>`);
-  const { pts, auto } = await detectCorners(canvas, m => { $('#cropMsg').textContent = m; });
-  $('#cropMsg').textContent = auto ? 'Found the card. Drag the corners if it’s off (sleeve edges are fine).' : (window.cv && cv.Mat ? 'Couldn’t spot the card edges. Drag the four corners onto the card’s corners.' : 'Edge finder didn’t download — check your internet. Drag the four corners onto the card’s corners.');
+    <div class="row" style="gap:8px;margin-top:10px" id="cropBtns"><button class="btn grow" id="cropOk">Looks good</button><button class="btn ghost" id="cropRetake">Retake</button></div>`);
+  $('#cropRetake').onclick = () => { closeSheet(); fromCamera ? startScan() : $('#camPick').click(); };
+  const found = startPts ? { pts: startPts, auto: true } : await detectCorners(canvas, m => { $('#cropMsg').textContent = m; });
+  if (found.auto && !forceManual) { // found it — go straight on, no dragging needed
+    $('#cropTitle').textContent = 'Reading the card…'; $('#cropMsg').textContent = window.Tesseract ? 'Found the card. Reading the number…' : 'Found the card. Downloading the text reader (first time only)…';
+    $('#cropBtns').style.display = 'none';
+    const view = document.createElement('canvas'), sc = Math.min(1, 300 / canvas.width); view.width = canvas.width * sc; view.height = canvas.height * sc;
+    const vc = view.getContext('2d'); vc.drawImage(canvas, 0, 0, view.width, view.height); vc.strokeStyle = '#A678F0'; vc.lineWidth = 3; vc.beginPath();
+    found.pts.forEach(([x, y], i) => i ? vc.lineTo(x * sc, y * sc) : vc.moveTo(x * sc, y * sc)); vc.closePath(); vc.stroke(); $('#ed').appendChild(view);
+    lastShot.pts = found.pts; return finishScan(canvas, found.pts);
+  }
+  $('#cropTitle').textContent = 'Check the crop';
+  $('#cropMsg').textContent = found.auto ? 'Drag the corners onto the card’s corners.' : (window.cv && cv.Mat ? 'Couldn’t find the card. Drag the four corners onto it — or Retake with the card flat on a plain table.' : 'Edge finder didn’t download — check your internet. Drag the four corners onto the card.');
   const ed = $('#ed'), view = document.createElement('canvas');
   const maxW = Math.min(ed.clientWidth || 340, 420), sc = Math.min(1, maxW / canvas.width);
   view.width = canvas.width * sc; view.height = canvas.height * sc;
   const vctx = view.getContext('2d'); ed.appendChild(view); ed.style.width = view.width + 'px';
-  let P = pts.map(([x, y]) => [x * sc, y * sc]);
+  let P = found.pts.map(([x, y]) => [x * sc, y * sc]);
   const draw = () => { vctx.drawImage(canvas, 0, 0, view.width, view.height); vctx.strokeStyle = '#A678F0'; vctx.lineWidth = 3; vctx.beginPath(); P.forEach(([x, y], i) => i ? vctx.lineTo(x, y) : vctx.moveTo(x, y)); vctx.closePath(); vctx.stroke(); };
   const handles = P.map((p, i) => { const h = document.createElement('div'); h.className = 'handle'; h.setAttribute('aria-label', 'Corner ' + (i + 1)); ed.appendChild(h); return h; });
   const place = () => { handles.forEach((h, i) => { h.style.left = P[i][0] + 'px'; h.style.top = P[i][1] + 'px'; }); draw(); };
@@ -485,14 +521,10 @@ async function openCropper(canvas, fromCamera) {
     h.onpointermove = ev => { P[i] = [Math.max(0, Math.min(view.width, ev.clientX - r.left)), Math.max(0, Math.min(view.height, ev.clientY - r.top))]; place(); };
     h.onpointerup = () => { h.onpointermove = null; }; }; });
   place();
-  $('#cropRetake').onclick = () => { closeSheet(); fromCamera ? startScan() : $('#camPick').click(); };
   $('#cropOk').onclick = async () => {
     $('#cropOk').disabled = true; $('#cropMsg').textContent = window.Tesseract ? 'Reading the card…' : 'Downloading the text reader (first time only)… then reading the card';
-    const full = warp(canvas, orderCorners(P.map(([x, y]) => [x / sc, y / sc])), 630, 880);
-    const read = await ocrCard(full);
-    const blob = await lowQuality(full);
-    const photo = 'p' + uid(); await DB.put('photos', photo, blob);
-    closeSheet(); openConfirm({ num: read.num, ocrName: read.name, photo, readOk: !!read.num, guess: !!read.num && !read.sure }); if (read.noReader) toast('Text reader didn’t download — check your internet and try again', 4000);
+    lastShot.pts = P.map(([x, y]) => [x / sc, y / sc]);
+    await finishScan(canvas, lastShot.pts);
   };
 }
 function lowQuality(canvas) {
@@ -555,13 +587,13 @@ async function ocrCard(canvas) {
   if (!w) return { num: '', name: '', noReader: true };
   try {
     const readings = [];
-    const passes = [['tight', 3, ''], ['tight', 3, 'c'], ['tight', 3, 'cb'], ['tight', 5, 'c'], ['wide', 3, ''], ['wide', 3, 'c'], ['wide', 3, 'cb'], ['wide', 5, 'c']];
+    const passes = [['tight', 2, ''], ['tight', 2, 'c'], ['tight', 2, 'cb'], ['sleeve', 2, 'c'], ['sleeve', 2, ''], ['wide', 2, ''], ['wide', 2, 'c'], ['wide', 2, 'cb']];
     for (const [where, sc, f] of passes) {
-      const r = where === 'tight' ? [.72, .008, .92, .058] : [.6, 0, 1, .07];
+      const r = where === 'tight' ? [.72, .008, .92, .058] : where === 'sleeve' ? [.66, .015, .95, .075] : [.6, 0, 1, .08];
       const filter = f === '' ? 'grayscale(1)' : f === 'c' ? 'grayscale(1) contrast(2.5) invert(1)' : 'grayscale(1) blur(1px) contrast(3) invert(1)';
       const { data } = await w.recognize(region(canvas, ...r, sc, filter)); readings.push(data.text);
     }
-    const { data: nd } = await w.recognize(region(canvas, .05, .45, .95, .8, 1.5, 'grayscale(1) contrast(1.4)'));
+    const { data: nd } = await w.recognize(region(canvas, .05, .45, .95, .88, 1, 'grayscale(1) contrast(1.4)'));
     const pick = pickCard(readings, nd.text), num = pick.num; window.lastScan = { readings, nameText: nd.text, num, top: window.lastPick };
     const name = nd.text.split('\n').map(s => s.trim()).filter(s => /[A-Za-z]{3}/.test(s)).sort((a, b) => b.length - a.length)[0] || '';
     return { num, sure: pick.sure, name: name.replace(/[^A-Za-z0-9 '()&.\-]/g, '').trim() };
@@ -598,12 +630,13 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
     ${editKey ? '' : `<div class="row" style="justify-content:space-between;margin-top:12px"><span>How many? <span class="small muted" id="haveNote">${have ? `(you have ${have})` : ''}</span></span>
       <div class="stepper"><button id="qm" aria-label="One fewer">−</button><span id="qv">1</span><button id="qp" aria-label="One more">+</button></div></div>
       <label class="f"><input type="checkbox" id="fInc" style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> These are on the way (not arrived yet)</label>`}
-    <div class="row" style="gap:8px;margin-top:16px"><button class="btn grow" id="fSave">${editKey ? 'Save changes' : 'Yes, add to collection'}</button>${!manual && !editKey ? '<button class="btn ghost" id="fRetake">Retake</button>' : ''}</div>`, root => {
+    <div class="row" style="gap:8px;margin-top:16px"><button class="btn grow" id="fSave">${editKey ? 'Save changes' : 'Yes, add to collection'}</button>${!manual && !editKey ? '<button class="btn ghost" id="fFix">Fix crop</button><button class="btn ghost" id="fRetake">Retake</button>' : ''}</div>`, root => {
     let qty = 1, coll = !!collector;
     root.querySelectorAll('#fVer button').forEach(b => b.onclick = () => { coll = b.dataset.v === '1'; root.querySelectorAll('#fVer button').forEach(x => x.classList.toggle('on', x === b)); });
     if (!editKey) { $('#qm').onclick = () => { qty = Math.max(1, qty - 1); $('#qv').textContent = qty; }; $('#qp').onclick = () => { qty++; $('#qv').textContent = qty; }; }
     $('#fNum').onchange = () => { const n = normNum($('#fNum').value); $('#fNum').value = n; const k = CATALOG[n]; if (k) { $('#fName').value = k.name; $('#fCol').value = k.colour || ''; $('#fType').value = k.type || ''; $('#fLv').value = k.lv ?? ''; $('#fCost').value = k.cost ?? ''; $('#fLink').value = k.link || ''; $('#fVan').checked = !!k.vanilla; if (!$('#fRar').value) $('#fRar').value = k.rarity || ''; } const h = ownedByNum(n, false); const hn = $('#haveNote'); if (hn) hn.textContent = h ? `(you have ${h})` : ''; };
     const rt = $('#fRetake'); if (rt) rt.onclick = () => { closeSheet(); startScan(); };
+    const fx = $('#fFix'); if (fx) { if (!lastShot || !photo) fx.remove(); else fx.onclick = () => { DB.del && DB.del('photos', photo); closeSheet(); openCropper(lastShot.canvas, lastShot.fromCamera, true, lastShot.pts); }; }
     $('#fSave').onclick = () => {
       const n = normNum($('#fNum').value), name = $('#fName').value.trim();
       if (!n) return toast('Add the card number first');
@@ -991,7 +1024,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.2 (sharper scans) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.3 (auto crop) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
