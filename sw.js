@@ -1,6 +1,7 @@
 // GTCG My Card Collection — service worker
 // Keeps the app working offline and receives screenshots shared from other apps.
-const SHELL = 'gtcg-shell-v8';
+const SHELL = 'gtcg-shell-v10';
+const IMAGES = 'gtcg-card-pictures';
 const LIBS = 'gtcg-libs-v1';
 const SHARED = 'gtcg-shared';
 const SHELL_FILES = ['./', './index.html', './catalog.json', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
@@ -46,6 +47,18 @@ self.addEventListener('fetch', e => {
       if (res.ok || res.type === 'opaque') c.put(e.request, res.clone());
       return res;
     }));
+    return;
+  }
+
+  // Card pictures: keep each one once seen, so the collection shows pictures offline
+  if (url.hostname === 'tcgplayer-cdn.tcgplayer.com') {
+    e.respondWith(caches.open(IMAGES).then(async c => {
+      const hit = await c.match(e.request.url);
+      if (hit) return hit;
+      const res = await fetch(e.request);
+      if (res.ok || res.type === 'opaque') c.put(e.request.url, res.clone());
+      return res;
+    }).catch(() => fetch(e.request)));
     return;
   }
 

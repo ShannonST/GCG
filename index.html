@@ -51,6 +51,10 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
 .tile .need{position:absolute;left:3px;right:3px;bottom:3px;text-align:center;font-size:10px;font-weight:700;background:var(--warn);color:#0E1016;border-radius:4px}
 .tile .plus{position:absolute;left:3px;top:3px;font-size:9px;font-weight:800;background:#FDE68A;color:#0E1016;border-radius:4px;padding:0 3px}
 .tile.missing .img{border-color:var(--warn);opacity:.75}
+.tile .slv{position:absolute;left:3px;bottom:3px;font-size:9px;font-weight:800;background:#0E1016cc;color:#fff;border:1px solid #fff8;border-radius:4px;padding:0 3px}
+.tile.sel .img{outline:3px solid var(--accent);outline-offset:2px}
+.tile .tick{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:800;color:#fff;background:#A678F055;border-radius:4px}
+.selbar{position:fixed;left:8px;right:8px;bottom:calc(84px + env(safe-area-inset-bottom));z-index:25;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px;box-shadow:0 6px 24px #0008}
 .tile .nm{font-size:11px;font-weight:600;line-height:1.25;max-height:28px;overflow:hidden}
 .tile .no{font-size:10px;color:var(--muted)}
 .list .li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
@@ -112,7 +116,7 @@ nav.tabs .scanbtn span.c{width:48px;height:48px;border-radius:16px;background:va
   <div class="bar">
     <button class="btn ghost" id="camClose" style="background:#0008;color:#fff;border-color:#fff6">Cancel</button>
     <button class="shutter" id="shutter" aria-label="Take photo"></button>
-    <label class="btn ghost" style="background:#0008;color:#fff;border-color:#fff6;display:inline-flex;align-items:center">Photo<input type="file" accept="image/*" id="camPick" hidden></label><input type="file" accept="image/*" capture="environment" id="camShoot" hidden>
+    <label class="btn ghost" style="background:#0008;color:#fff;border-color:#fff6;display:inline-flex;align-items:center">Photo<input type="file" accept="image/*" id="camPick" hidden></label><input type="file" accept="image/*" capture="environment" id="camShoot" hidden><input type="file" accept="image/*" capture="environment" id="numShoot" hidden>
   </div>
 </div>
 
@@ -173,7 +177,7 @@ const DB = {
   keys(store) { return this.tx(store, 'readonly', s => s.getAllKeys()); },
   clear(store) { return this.tx(store, 'readwrite', s => s.clear()); },
 };
-const BLANK = () => ({ v: 1, cards: {}, learned: {}, cores: {}, decks: {}, settings: { officialImages: true, quality: 'low', includeIncoming: true } });
+const BLANK = () => ({ v: 1, cards: {}, learned: {}, cores: {}, decks: {}, settings: { officialImages: true, quality: 'low', includeIncoming: true, keepPhotos: false } });
 let S = BLANK();
 let saveTimer;
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => DB.put('kv', 'state', S).catch(() => toast('Could not save — storage may be full')), 150); }
@@ -184,6 +188,8 @@ function rebuildCatalog() { CATALOG = {}; SEED.forEach(c => CATALOG[c.num] = c);
 const info = num => CATALOG[num] || { num, name: num, colour: '', type: '', lv: null, cost: null, rarity: '', link: '', vanilla: false };
 
 // ---------- Collection maths ----------
+const sleeveOf = c => c.sleeved === true ? 'single' : (c.sleeved || ''); // '', 'single' or 'double'
+const SLEEVE_LABEL = { '': 'Not sleeved', single: 'Single sleeved', double: 'Double sleeved' };
 const keyOf = (num, collector, art = '') => num + (collector ? '+' + (art || '') : '');
 function ownedByNum(num, incoming = S.settings.includeIncoming) {
   let n = 0; for (const c of Object.values(S.cards)) if (c.num === num) n += (c.owned || 0) + (incoming ? (c.incoming || 0) : 0); return n;
@@ -217,13 +223,15 @@ async function hydrateImages(root) {
     img.src = src;
   }
 }
-function tileHTML({ num, name, qty, need, collector, art, photo, onclick, small }) {
+function tileHTML({ num, name, qty, need, collector, art, photo, onclick, small, sleeve, selected }) {
   const i = info(num);
-  return `<button class="tile ${need ? 'missing' : ''}" data-act="${esc(onclick || '')}" data-num="${esc(num)}">
+  return `<button class="tile ${need ? 'missing' : ''} ${selected ? 'sel' : ''}" data-act="${esc(onclick || '')}" data-num="${esc(num)}">
     <div class="img" style="background:${colourVar(i.colour)}" ${photo ? `data-photo="${esc(photo)}"` : ''} data-official="${esc(num + (art ? '@' + art : ''))}">
       <div class="ph">${esc(i.lv != null ? 'Lv' + i.lv : (i.type || ''))}</div>
       ${qty != null ? `<span class="qty">${qty}</span>` : ''}
       ${collector ? '<span class="plus">+</span>' : ''}
+      ${sleeve ? `<span class="slv">${sleeve === 'double' ? '2× sleeve' : 'sleeve'}</span>` : ''}
+      ${selected ? '<span class="tick">✓</span>' : ''}
       ${need ? `<span class="need">need ${need}</span>` : ''}
     </div>
     <div class="nm">${esc(name || i.name)}</div>${small === false ? '' : `<div class="no">${esc(num)}</div>`}
@@ -233,7 +241,7 @@ function tileHTML({ num, name, qty, need, collector, art, photo, onclick, small 
 // ---------- Navigation ----------
 let TAB = 'collection', VIEW = {};
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { if (b.dataset.tab === 'scan') return startScan(); go(b.dataset.tab); });
-function go(tab, view = {}) { TAB = tab; VIEW = view; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab)); render(); window.scrollTo(0, 0); }
+function go(tab, view = {}) { if (tab !== 'collection') SELECT = null; TAB = tab; VIEW = view; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab)); render(); window.scrollTo(0, 0); }
 function render() { const r = { collection: renderCollection, building: renderBuilding, build: renderBuild, more: renderMore, core: renderCore, shopping: renderShopping, deck: renderDeck }[TAB]; r(); }
 
 // ---------- Sheets ----------
@@ -243,6 +251,7 @@ $('#sheetBg').onclick = e => { if (e.target.id === 'sheetBg') closeSheet(); };
 
 /* =========================== COLLECTION =========================== */
 let FILTER = { q: '', colour: '' };
+let SELECT = null; // a Set of card keys while bulk-selecting
 function renderCollection() {
   const all = Object.entries(S.cards).filter(([, c]) => (c.owned || 0) + (c.incoming || 0) > 0);
   const owned = all.reduce((s, [, c]) => s + (c.owned || 0), 0);
@@ -252,22 +261,40 @@ function renderCollection() {
   const rows = all.filter(([, c]) => { const i = info(c.num); return (!FILTER.colour || i.colour === FILTER.colour) && (!q || i.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q)); })
     .sort((a, b) => { const A = info(a[1].num), B = info(b[1].num); return (COLOURS.indexOf(A.colour) - COLOURS.indexOf(B.colour)) || a[1].num.localeCompare(b[1].num); });
   $('#app').innerHTML = `
-  <div class="top"><div class="row"><h1 class="grow">My Collection</h1></div>
+  <div class="top"><div class="row"><h1 class="grow">My Collection</h1>${all.length ? `<button class="btn ${SELECT ? '' : 'ghost'} sm" id="selMode">${SELECT ? 'Done' : 'Select'}</button>` : ''}</div>
     <div class="stats"><div class="stat"><b>${owned}</b><span class="small muted">cards owned</span></div><div class="stat"><b>${coming}</b><span class="small muted">on the way</span></div><div class="stat"><b class="${buy ? 'warn' : ''}">${buy}</b><span class="small muted">to buy</span></div></div>
     <input type="search" id="q" placeholder="Search name or number" value="${esc(FILTER.q)}" aria-label="Search cards">
     <div class="chips" style="margin-top:8px">${['', ...COLOURS].map(c => `<button class="chip ${FILTER.colour === c ? 'on' : ''}" data-col="${c}">${c ? c[0].toUpperCase() + c.slice(1) : 'All'}</button>`).join('')}</div>
   </div>
-  <div class="wrap">${all.length ? (rows.length ? `<div class="grid">${rows.map(([k, c]) => tileHTML({ num: c.num, qty: c.owned ? (c.incoming ? `${c.owned}+${c.incoming}` : c.owned) : `+${c.incoming}`, collector: c.collector, art: c.art, photo: c.photo, onclick: 'card:' + k })).join('')}</div>` : '<p class="empty">No cards match.</p>')
+  <div class="wrap">${all.length ? (rows.length ? `<div class="grid">${rows.map(([k, c]) => tileHTML({ num: c.num, qty: c.owned ? (c.incoming ? `${c.owned}+${c.incoming}` : c.owned) : `+${c.incoming}`, collector: c.collector, art: c.art, photo: c.photo, sleeve: sleeveOf(c), selected: SELECT && SELECT.has(k), onclick: (SELECT ? 'pick:' : 'card:') + k })).join('')}</div>` : '<p class="empty">No cards match.</p>')
       : `<div class="empty"><b>Your collection is empty</b>Tap the scan button below to add your first card, or add one by hand.<br><br><button class="btn" data-act="add">Add a card by hand</button></div>`}</div>`;
   $('#q').oninput = e => { FILTER.q = e.target.value; const pos = e.target.selectionStart; renderCollection(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
   document.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { FILTER.colour = b.dataset.col; renderCollection(); });
+  const sm = $('#selMode'); if (sm) sm.onclick = () => { SELECT = SELECT ? null : new Set(); renderCollection(); };
+  if (SELECT) {
+    const shown = rows.map(([k]) => k), allOn = shown.length && shown.every(k => SELECT.has(k));
+    const bar = document.createElement('div'); bar.className = 'selbar';
+    bar.innerHTML = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${SELECT.size} selected</b>
+        <button class="btn ghost sm" id="selAll">${allOn ? 'Clear' : 'Select all' + (FILTER.colour || FILTER.q ? ' shown' : '')}</button></div>
+      <div class="small muted" style="margin-bottom:6px">Set sleeves for the selected cards:</div>
+      <div class="row" style="gap:6px"><button class="btn ghost sm grow" data-bulk="">None</button><button class="btn sm grow" data-bulk="single">Single</button><button class="btn ghost sm grow" data-bulk="double">Double</button></div>`;
+    $('#app').appendChild(bar); $('#app').querySelector('.wrap').style.paddingBottom = '170px';
+    $('#selAll').onclick = () => { if (allOn) shown.forEach(k => SELECT.delete(k)); else shown.forEach(k => SELECT.add(k)); renderCollection(); };
+    bar.querySelectorAll('[data-bulk]').forEach(b => b.onclick = () => {
+      if (!SELECT.size) return toast('Tap cards to select them first');
+      const v = b.dataset.bulk; SELECT.forEach(k => { if (S.cards[k]) S.cards[k].sleeved = v; });
+      const n = SELECT.size; SELECT = null; save(); renderCollection(); toast(`${n} card${n === 1 ? '' : 's'}: ${SLEEVE_LABEL[v].toLowerCase()}`);
+    });
+  }
   bindActs($('#app')); hydrateImages($('#app'));
 }
 
+function endSelect() { SELECT = null; }
 function bindActs(root) {
   root.querySelectorAll('[data-act]').forEach(el => el.onclick = () => {
     const a = el.dataset.act; if (!a) return;
     if (a.startsWith('card:')) openCard(a.slice(5));
+    else if (a.startsWith('pick:')) { const k = a.slice(5); SELECT.has(k) ? SELECT.delete(k) : SELECT.add(k); renderCollection(); }
     else if (a === 'add') openConfirm({ num: '', manual: true });
     else if (a.startsWith('core:')) go('core', { id: a.slice(5) });
     else if (a.startsWith('catalog:')) openCatalogCard(a.slice(8));
@@ -296,7 +323,8 @@ function openCard(key) {
     ${c.incoming ? `<button class="btn ghost sm" id="arrived" style="margin-top:8px">Mark ${c.incoming} as arrived</button>` : ''}
     <div class="row" style="gap:10px"><div class="grow"><label class="f" for="paid">Price paid each</label><input type="number" step="0.01" inputmode="decimal" id="paid" value="${c.pricePaid ?? ''}" placeholder="$"></div>
       <div class="grow"><label class="f" for="rar">Rarity</label><input type="text" id="rar" value="${esc(c.rarity || '')}" placeholder="LR, R, C+"></div></div>
-    <label class="f"><input type="checkbox" id="slv" ${c.sleeved ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Sleeved</label>
+    <label class="f">Sleeves</label>
+    <div class="seg" id="slv">${['', 'single', 'double'].map(v => `<button data-sv="${v}" class="${sleeveOf(c) === v ? 'on' : ''}">${v === '' ? 'None' : v === 'single' ? 'Single' : 'Double'}</button>`).join('')}</div>
     <label class="f" for="notes">Notes</label><input type="text" id="notes" value="${esc(c.notes || '')}">
     <h2>Sold price</h2>
     ${i.usd != null || i.usdPlus != null ? `<p class="small muted">TCGplayer market (US$): ${i.usd != null ? 'normal US$' + i.usd.toFixed(2) : ''}${i.usd != null && i.usdPlus != null ? ' · ' : ''}${i.usdPlus != null ? 'collector versions from US$' + i.usdPlus.toFixed(2) : ''}</p>` : ''}
@@ -315,11 +343,12 @@ function openCard(key) {
       <button class="btn ghost" id="cEdit">Edit details</button>
       <button class="btn danger" id="cDel">Delete</button>
     </div>`, root => {
-    const tmp = { owned: c.owned || 0, incoming: c.incoming || 0 };
+    const tmp = { owned: c.owned || 0, incoming: c.incoming || 0 }; let slv = sleeveOf(c);
+    root.querySelectorAll('[data-sv]').forEach(b => b.onclick = () => { slv = b.dataset.sv; root.querySelectorAll('[data-sv]').forEach(x => x.classList.toggle('on', x === b)); });
     root.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { const [f, d] = b.dataset.s.split(':'); tmp[f] = Math.max(0, tmp[f] + +d); $('#v-' + f).textContent = tmp[f]; });
     const arr = $('#arrived'); if (arr) arr.onclick = () => { tmp.owned += tmp.incoming; tmp.incoming = 0; $('#v-owned').textContent = tmp.owned; $('#v-incoming').textContent = 0; };
     $('#cSave').onclick = () => {
-      Object.assign(c, tmp, { pricePaid: $('#paid').value === '' ? null : +$('#paid').value, rarity: $('#rar').value.trim(), sleeved: $('#slv').checked, notes: $('#notes').value.trim() });
+      Object.assign(c, tmp, { pricePaid: $('#paid').value === '' ? null : +$('#paid').value, rarity: $('#rar').value.trim(), sleeved: slv, notes: $('#notes').value.trim() });
       if (!c.owned && !c.incoming) { delete S.cards[key]; } save(); closeSheet(); render(); toast('Saved');
     };
     $('#cEdit').onclick = () => openConfirm({ num: c.num, photo: c.photo, collector: c.collector, art: c.art, rarity: c.rarity, editKey: key });
@@ -336,8 +365,10 @@ function searchString(nums) { const base = nums.length > 1 ? `(${nums.join(',')}
 let stream = null;
 function startScan() { // the phone's own camera app takes far better photos than an in-app preview
   openSheet(`<h3>Scan cards</h3><p class="small muted">One card or several in one photo. Lay them flat on a plain table, not touching, and fill the photo with them.</p>
-    <div class="row" style="gap:8px;margin-top:10px"><button class="btn grow" id="scCam">Take photo</button><button class="btn ghost grow" id="scGal">Choose from gallery</button></div>`, () => {
-    $('#scCam').onclick = () => { $('#camShoot').click(); }; $('#scGal').onclick = () => { $('#camPick').click(); };
+    <div class="row" style="gap:8px;margin-top:10px"><button class="btn grow" id="scCam">Take photo</button><button class="btn ghost grow" id="scGal">Choose from gallery</button></div>
+    <h3 style="margin-top:18px">Quick: number only</h3><p class="small muted">Take a close-up of just the card number in the top-right corner. Fill the photo with it, straight on, no glare.</p>
+    <button class="btn ghost" id="scNum" style="width:100%;margin-top:6px">Photo the number</button>`, () => {
+    $('#scCam').onclick = () => { $('#camShoot').click(); }; $('#scGal').onclick = () => { $('#camPick').click(); }; $('#scNum').onclick = () => { $('#numShoot').click(); };
   });
   loadOpenCV(); loadTesseract(); // start downloading helpers in the background
 }
@@ -364,6 +395,27 @@ $('#shutter').onclick = async () => {
   stopScan(); openCropper(cv0, true);
 };
 $('#camPick').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; stopScan(); closeSheet(); openCropper(await fileToCanvas(f, 3000), false); };
+$('#numShoot').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  openSheet(`<h3>Reading the number…</h3><p class="small muted">${window.Tesseract ? '' : 'Downloading the text reader (first time only)…'}</p>`);
+  const read = await ocrNumberOnly(await fileToCanvas(f, 1400));
+  closeSheet(); openConfirm({ num: read.num, readOk: !!read.num, guess: !!read.num && !read.sure, alts: read.sure ? [] : read.alts, numOnly: true });
+  if (read.noReader) toast('Text reader didn’t download — check your internet and try again', 4000);
+};
+// A close-up of the number: read the whole photo several ways and match against the card list
+async function ocrNumberOnly(canvas) {
+  const w = await Promise.race([loadTesseract(), new Promise(r => setTimeout(() => r(null), 90000))]);
+  if (!w) return { num: '', noReader: true };
+  try {
+    const readings = [];
+    const filters = ['grayscale(1) contrast(1.6)', 'grayscale(1) contrast(2.5) invert(1)', 'grayscale(1) blur(1px) contrast(3) invert(1)'];
+    for (const r of [[0, 0, 1, 1], [0, .15, 1, .85]]) for (const f of filters) {
+      const sc = Math.min(2, 1200 / canvas.width);
+      const { data } = await w.recognize(region(canvas, ...r, sc, f)); readings.push(data.text);
+    }
+    const pick = pickCard(readings, '', ''); window.lastScan = { readings, num: pick.num, top: window.lastPick };
+    return { num: pick.num, sure: pick.sure, alts: (window.lastPick || []).map(x => x[1]).filter(n => n !== pick.num).slice(0, 3) };
+  } catch (e) { console.warn(e); return { num: '' }; }
+}
 $('#camShoot').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; closeSheet(); openCropper(await fileToCanvas(f, 3000), true); };
 async function fileToCanvas(file, maxSide) {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(async () => { const img = new Image(); img.src = URL.createObjectURL(file); await img.decode(); return img; });
@@ -535,8 +587,8 @@ function openMultiReview(items) {
       const pick = items.filter(it => it.on);
       if (pick.some(it => !it.num)) return toast('Type the number for every ticked card, or untick it');
       for (const it of pick) { const key = keyOf(it.num, false), c = S.cards[key] || (S.cards[key] = { num: it.num, collector: false, owned: 0, incoming: 0, rarity: info(it.num).rarity || '', sleeved: false, notes: '' });
-        c.owned = (c.owned || 0) + 1; if (!c.photo) c.photo = it.photo; }
-      save(); closeSheet(); go('collection'); toast(`Added ${pick.length} card${pick.length === 1 ? '' : 's'}`);
+        c.owned = (c.owned || 0) + 1; if (S.settings.keepPhotos && !c.photo) c.photo = it.photo; }
+      save(); closeSheet(); go('collection'); toast(`Added ${pick.length} card${pick.length === 1 ? '' : 's'}`); tidyPhotos();
     };
   });
 }
@@ -600,7 +652,7 @@ function findNum(text) {
 }
 // The card-number font is stylised (G reads as 6, 1 as ")", T as I), so we compare readings against the real card list,
 // treating look-alike characters as near matches, and use the printed name as a second check.
-const LOOKALIKE = ['0ODQUB8', '1IL|)]J!T7', '5S$', '6GC0', '2Z', '4A', '8B3&'];
+const LOOKALIKE = ['0ODQUB8', '1IL|)]J!T7', '5S$', '6GC0', '2Z', '4A', '8B3&', '5G', '5O'];
 const subCost = (a, b) => a === b ? 0 : LOOKALIKE.some(g => g.includes(a) && g.includes(b)) ? 0.3 : 1;
 function editDist(a, b) { const d = Array.from({ length: a.length + 1 }, (_, i) => [i]); for (let j = 1; j <= b.length; j++) d[0][j] = j;
   for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + subCost(a[i - 1], b[j - 1])); return d[a.length][b.length]; }
@@ -665,7 +717,7 @@ async function ocrCard(canvas) {
 }
 
 // ---------- Confirm sheet (after scanning, or adding by hand) ----------
-function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, guess = false, alts = [], manual = false, collector = false, art = '', rarity = '', editKey = null }) {
+function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, guess = false, alts = [], numOnly = false, manual = false, collector = false, art = '', rarity = '', editKey = null }) {
   num = normNum(num); const known = num && CATALOG[num]; const i = known ? info(num) : { name: ocrName, colour: '', type: '', lv: '', cost: '', rarity: '', link: '' };
   const have = num ? ownedByNum(num, false) : 0;
   const title = editKey ? 'Edit card' : manual ? 'Add a card' : (readOk ? (guess ? 'Best guess — check it' : 'Is this right?') : 'Couldn’t read the number');
@@ -721,7 +773,8 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
     if (!editKey) { $('#qm').onclick = () => { qty = Math.max(1, qty - 1); $('#qv').textContent = qty; }; $('#qp').onclick = () => { qty++; $('#qv').textContent = qty; }; }
     $('#fNum').onchange = () => { const n = normNum($('#fNum').value); $('#fNum').value = n; const k = CATALOG[n]; if (k) { $('#fName').value = k.name; $('#fCol').value = k.colour || ''; $('#fType').value = k.type || ''; $('#fLv').value = k.lv ?? ''; $('#fCost').value = k.cost ?? ''; $('#fLink').value = k.link || ''; $('#fVan').checked = !!k.vanilla; if (!$('#fRar').value) $('#fRar').value = k.rarity || ''; } const h = ownedByNum(n, false); const hn = $('#haveNote'); if (hn) hn.textContent = h ? `(you have ${h})` : ''; artSel = ''; if (coll) showArts(); };
     root.querySelectorAll('[data-alt]').forEach(b => b.onclick = () => { $('#fNum').value = b.dataset.alt; $('#fNum').onchange(); root.querySelectorAll('[data-alt]').forEach(x => x.classList.toggle('ok', x === b)); });
-    const rt = $('#fRetake'); if (rt) rt.onclick = () => { closeSheet(); $('#camShoot').click(); };
+    const rt = $('#fRetake'); if (rt) rt.onclick = () => { closeSheet(); $(numOnly ? '#numShoot' : '#camShoot').click(); };
+    if (numOnly) $('#fFix')?.remove();
     const fx = $('#fFix'); if (fx) { if (!lastShot || !photo) fx.remove(); else fx.onclick = () => { DB.del && DB.del('photos', photo); closeSheet(); openCropper(lastShot.canvas, lastShot.fromCamera, true, lastShot.pts); }; }
     $('#fSave').onclick = () => {
       const n = normNum($('#fNum').value), name = $('#fName').value.trim();
@@ -738,10 +791,11 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
         const inc = $('#fInc').checked, c = S.cards[key] || (S.cards[key] = { num: n, collector: coll, art: art2, owned: 0, incoming: 0, rarity: rar, sleeved: false, notes: '' });
         if (inc) c.incoming = (c.incoming || 0) + qty;
         else { c.owned = (c.owned || 0) + qty; if (c.incoming) c.incoming = Math.max(0, c.incoming - qty); }
-        if (photo && !c.photo) c.photo = photo; if (rar) c.rarity = rar;
+        if (photo && S.settings.keepPhotos && !c.photo) c.photo = photo; if (rar) c.rarity = rar;
       }
       save(); closeSheet(); go('collection'); toast(editKey ? 'Updated' : `Added ${qty} × ${name || n}`);
       if (multiPending && multiPending.length) { const rest = multiPending; multiPending = null; openMultiReview(rest); } else multiPending = null;
+      if (!document.querySelector('#mList')) tidyPhotos();
     };
   });
 }
@@ -1104,19 +1158,23 @@ function renderMore() {
     <p class="small muted">Saves everything (cards, cores, decks, prices and your photos) as one file. Share it to Gmail to email it to yourself.</p>
     <div class="row" style="gap:8px"><button class="btn grow" id="bk">Back up now</button><label class="btn ghost" style="display:inline-flex;align-items:center">Restore<input type="file" accept=".json,application/json" id="rs" hidden></label></div>
     <h2>Settings</h2>
-    <label class="f"><input type="checkbox" id="stOff" ${S.settings.officialImages ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show official card pictures when online (from TCGplayer's image server, not saved)</label>
-    <label class="f" for="stQ">Photo quality when scanning</label>
+    <label class="f"><input type="checkbox" id="stOff" ${S.settings.officialImages ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show card pictures (from TCGplayer; each one is saved on this phone the first time it shows, so they work offline after)</label>
+    <label class="f"><input type="checkbox" id="stKeep" ${S.settings.keepPhotos ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Keep my own scan photos (off = scans are only used to read the card, then thrown away)</label>
+    ${Object.values(S.cards).some(c => c.photo) ? '<button class="btn ghost sm" id="stDelPh" style="margin-top:6px">Remove my photos (use card pictures instead)</button>' : ''}
+    <label class="f" for="stQ">Photo quality (only if keeping your photos)</label>
     <select id="stQ"><option value="low" ${S.settings.quality === 'low' ? 'selected' : ''}>Low (~20 KB a card)</option><option value="medium" ${S.settings.quality === 'medium' ? 'selected' : ''}>Medium (~60 KB)</option><option value="high" ${S.settings.quality === 'high' ? 'selected' : ''}>High (~150 KB)</option></select>
     <h2>Card list</h2>
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.4 (multi-card scan, alt art) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.7 (number-only scan) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
   $('#stOff').onchange = e => { S.settings.officialImages = e.target.checked; save(); };
   $('#stQ').onchange = e => { S.settings.quality = e.target.value; save(); };
+  $('#stKeep').onchange = e => { S.settings.keepPhotos = e.target.checked; save(); };
+  const dp = $('#stDelPh'); if (dp) dp.onclick = async () => { Object.values(S.cards).forEach(c => delete c.photo); save(); await tidyPhotos(); renderMore(); toast('Photos removed — showing card pictures'); };
   $('#bk').onclick = backup;
   $('#rs').onchange = e => restore(e.target.files[0]);
   $('#cl').onchange = e => importCatalog(e.target.files[0]);
@@ -1170,11 +1228,16 @@ async function handleShared() {
   if (files.length) readSoldScreenshots(files, '');
 }
 
+// Scan photos are only kept if you choose to; anything not attached to a card is cleared out
+async function tidyPhotos() {
+  try { const used = new Set(Object.values(S.cards).map(c => c.photo).filter(Boolean));
+    for (const k of await DB.keys('photos')) if (!used.has(k)) { await DB.del('photos', k); if (photoURLs[k]) { URL.revokeObjectURL(photoURLs[k]); delete photoURLs[k]; } } } catch { }
+}
 // ---------- Start ----------
 (async () => {
   try { await DB.open(); const saved = await DB.get('kv', 'state'); if (saved) S = { ...BLANK(), ...saved, settings: { ...BLANK().settings, ...(saved.settings || {}) } }; }
   catch { toast('Storage unavailable — changes won’t be kept', 4000); }
-  await loadSeed(); rebuildCatalog(); render(); handleShared();
+  await loadSeed(); rebuildCatalog(); render(); handleShared(); tidyPhotos();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => { });
 })();
