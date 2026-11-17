@@ -135,7 +135,9 @@ const RULES = {
   bannedPairs: [['ST01-010', 'ST05-010'], ['GD01-008', 'GD05-015']], // Amuro + Mikazuki, Guntank + M1 Astray Shrike
 };
 const COLOURS = ['purple', 'blue', 'white', 'red', 'green'];
-const TYPES = ['Unit', 'Pilot', 'Command', 'Base'];
+const TYPES = ['Unit', 'Pilot', 'Command', 'Base', 'Resource', 'EX Resource', 'EX Base'];
+const RESOURCE_TYPES = new Set(['Resource', 'EX Resource', 'EX Base']); // these live in the separate resource deck, not the 50 cards
+const isResource = num => RESOURCE_TYPES.has(info(num).type);
 const RAR_SCORE = { LR: 5, R: 3.5, U: 2.5, C: 1.5 };
 
 // ---------- Card list ----------
@@ -258,13 +260,13 @@ function renderCollection() {
   const coming = all.reduce((s, [, c]) => s + (c.incoming || 0), 0);
   const buy = Object.entries(needs('target')).reduce((s, [n, q]) => s + Math.max(0, q - ownedByNum(n, true)), 0);
   const q = FILTER.q.toLowerCase();
-  const rows = all.filter(([, c]) => { const i = info(c.num); return (!FILTER.colour || i.colour === FILTER.colour) && (!q || i.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q)); })
+  const rows = all.filter(([, c]) => { const i = info(c.num); return (!FILTER.colour || (FILTER.colour === 'res' ? RESOURCE_TYPES.has(i.type) : i.colour === FILTER.colour)) && (!q || i.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q)); })
     .sort((a, b) => { const A = info(a[1].num), B = info(b[1].num); return (COLOURS.indexOf(A.colour) - COLOURS.indexOf(B.colour)) || a[1].num.localeCompare(b[1].num); });
   $('#app').innerHTML = `
   <div class="top"><div class="row"><h1 class="grow">My Collection</h1>${all.length ? `<button class="btn ${SELECT ? '' : 'ghost'} sm" id="selMode">${SELECT ? 'Done' : 'Select'}</button>` : ''}</div>
     <div class="stats"><div class="stat"><b>${owned}</b><span class="small muted">cards owned</span></div><div class="stat"><b>${coming}</b><span class="small muted">on the way</span></div><div class="stat"><b class="${buy ? 'warn' : ''}">${buy}</b><span class="small muted">to buy</span></div></div>
     <input type="search" id="q" placeholder="Search name or number" value="${esc(FILTER.q)}" aria-label="Search cards">
-    <div class="chips" style="margin-top:8px">${['', ...COLOURS].map(c => `<button class="chip ${FILTER.colour === c ? 'on' : ''}" data-col="${c}">${c ? c[0].toUpperCase() + c.slice(1) : 'All'}</button>`).join('')}</div>
+    <div class="chips" style="margin-top:8px">${['', ...COLOURS, 'res'].map(c => `<button class="chip ${FILTER.colour === c ? 'on' : ''}" data-col="${c}">${c === 'res' ? 'Resources' : c ? c[0].toUpperCase() + c.slice(1) : 'All'}</button>`).join('')}</div>
   </div>
   <div class="wrap">${all.length ? (rows.length ? `<div class="grid">${rows.map(([k, c]) => tileHTML({ num: c.num, qty: c.owned ? (c.incoming ? `${c.owned}+${c.incoming}` : c.owned) : `+${c.incoming}`, collector: c.collector, art: c.art, photo: c.photo, sleeve: sleeveOf(c), selected: SELECT && SELECT.has(k), onclick: (SELECT ? 'pick:' : 'card:') + k })).join('')}</div>` : '<p class="empty">No cards match.</p>')
       : `<div class="empty"><b>Your collection is empty</b>Tap the scan button below to add your first card, or add one by hand.<br><br><button class="btn" data-act="add">Add a card by hand</button></div>`}</div>`;
@@ -408,8 +410,22 @@ async function ocrNumberOnly(canvas) {
   try {
     const readings = [];
     const filters = ['grayscale(1) contrast(1.6)', 'grayscale(1) contrast(2.5) invert(1)', 'grayscale(1) blur(1px) contrast(3) invert(1)'];
-    for (const r of [[0, 0, 1, 1], [0, .15, 1, .85]]) for (const f of filters) {
-      const sc = Math.min(2, 1200 / canvas.width);
+    // the number sits on a black tab: find the dark area and read that closely too
+    const tab = (() => { const k = Math.min(1, 300 / canvas.width), t = document.createElement('canvas'); t.width = Math.round(canvas.width * k); t.height = Math.round(canvas.height * k);
+      const x = t.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0, t.width, t.height); const d = x.getImageData(0, 0, t.width, t.height).data;
+      const rows = new Array(t.height).fill(0), cols = new Array(t.width).fill(0);
+      for (let y = 0; y < t.height; y++) for (let xx = 0; xx < t.width; xx++) { const i = (y * t.width + xx) * 4; if (d[i] + d[i + 1] + d[i + 2] < 180) { rows[y]++; cols[xx]++; } }
+      // tallest band of mostly-dark rows (ignores thin dark edges of the photo)
+      let best = [0, -1], run = -1; for (let y = 0; y <= t.height; y++) { const dark = y < t.height && rows[y] > t.width * 0.25 && rows[y] < t.width * 0.97;
+        if (dark && run < 0) run = y; if (!dark && run >= 0) { if (y - run > best[1] - best[0]) best = [run, y]; run = -1; } }
+      if (best[1] - best[0] < t.height * 0.08) return null;
+      const cc = new Array(t.width).fill(0);
+      for (let y = best[0]; y < best[1]; y++) for (let xx = 0; xx < t.width; xx++) { const i = (y * t.width + xx) * 4; if (d[i] + d[i + 1] + d[i + 2] < 180) cc[xx]++; }
+      const cx = cc.map((v, i) => v > (best[1] - best[0]) * 0.6 ? i : -1).filter(i => i >= 0); if (cx.length < t.width * 0.15) return null;
+      return [Math.max(0, cx[0] / t.width - .02), Math.max(0, best[0] / t.height - .03), Math.min(1, cx[cx.length - 1] / t.width + .02), Math.min(1, best[1] / t.height + .03)]; })();
+    const areas = [[0, 0, 1, 1], [0, .15, 1, .85]]; if (tab) areas.unshift(tab);
+    for (const r of areas) for (const f of filters) {
+      const sc = Math.min(3, 1200 / (canvas.width * (r[2] - r[0])));
       const { data } = await w.recognize(region(canvas, ...r, sc, f)); readings.push(data.text);
     }
     const pick = pickCard(readings, '', ''); window.lastScan = { readings, num: pick.num, top: window.lastPick };
@@ -671,7 +687,8 @@ function pickCard(readings, nameText, colour = '') {
     const target = numText(num);
     // judge on the clearest reads: the best one counts most, plus the next two as a cross-check (noisy reads are ignored)
     const ds = rs.map(r => Math.min(3, bestWindow(target, r))).sort((a, b) => a - b);
-    let score = (ds.length ? 0.6 * ds[0] + 0.4 * (ds.slice(0, 3).reduce((t, d) => t + d, 0) / Math.min(3, ds.length)) : 3) + Math.max(0, 7 - target.length) * 0.6;
+    let score = ds.length ? 0.6 * ds[0] + 0.4 * (ds.slice(0, 3).reduce((t, d) => t + d, 0) / Math.min(3, ds.length)) : 3;
+    score += Math.max(0, 7 - target.length) * 0.6 * Math.min(1, (ds[0] ?? 3) / 0.5); // short numbers (R-001) only win on a clean read
     const nm = cleanName(c.name || '');
     if (nm.length >= 4 && nameLines.length) {
       const sim = Math.max(...nameLines.map(l => 1 - (bestWindow(nm, l) + Math.max(0, l.length - nm.length - 3) * 0.6) / nm.length));
@@ -680,6 +697,10 @@ function pickCard(readings, nameText, colour = '') {
     if (colour && c.colour && c.colour !== colour) score += 0.6; // wrong colour for this card
     scored.push([score, num]);
   }
+  scored.sort((a, b) => a[0] - b[0]);
+  // a short number hiding inside a longer one that reads just as well (R-001 in EXR-001): the longer one wins
+  const top = scored.slice(0, 6);
+  for (const sh of top) for (const lg of top) if (lg !== sh && Math.abs(lg[0] - sh[0]) < 0.05 && lg[1].length > sh[1].length && numText(lg[1]).endsWith(numText(sh[1]))) sh[0] += 0.3;
   scored.sort((a, b) => a[0] - b[0]);
   const [s1, n1] = scored[0] || [9, ''], s2 = (scored[1] || [9])[0];
   window.lastPick = scored.slice(0, 4);
@@ -966,7 +987,7 @@ function renderBuild() {
 // --- the rule-based core builder ---
 function autoBuild(colour, incoming, avoidUsed) {
   const usedElsewhere = {}; if (avoidUsed) for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) usedElsewhere[e.num] = (usedElsewhere[e.num] || 0) + e.qty;
-  const pool = Object.values(CATALOG).filter(c => c.colour === colour && !RULES.banned[c.num]).map(c => ({ ...c, avail: Math.max(0, playableByNum(c.num, incoming) - (usedElsewhere[c.num] || 0)) })).filter(c => c.avail > 0);
+  const pool = Object.values(CATALOG).filter(c => c.colour === colour && !RESOURCE_TYPES.has(c.type) && !RULES.banned[c.num]).map(c => ({ ...c, avail: Math.max(0, playableByNum(c.num, incoming) - (usedElsewhere[c.num] || 0)) })).filter(c => c.avail > 0);
   const ownedPilots = new Set(pool.filter(c => c.type === 'Pilot').map(c => c.name.toLowerCase()));
   const linkedUnits = new Set(pool.filter(c => c.type === 'Unit' && c.link).map(c => c.link.toLowerCase()));
   const score = c => {
@@ -1025,6 +1046,8 @@ function deckCards(d) { const m = {}; for (const id of [d.a, d.b]) for (const e 
 function checkDeck(d) {
   const cards = deckCards(d), errors = [], warns = [], n = cards.reduce((s, e) => s + e.qty, 0);
   if (d.a === d.b) errors.push('Both halves are the same core');
+  const res = cards.filter(e => isResource(e.num)).reduce((s, e) => s + e.qty, 0);
+  if (res) errors.push(`${res} resource card${res === 1 ? '' : 's'} in the main deck — resources go in the separate 10-card resource deck`);
   if (n !== 50) errors.push(`${n} cards — a deck must be exactly 50`);
   const cols = [...new Set(cards.map(e => info(e.num).colour).filter(Boolean))]; if (cols.length > 2) errors.push(`${cols.length} colours (${cols.join(', ')}) — max 2`);
   const unk = cards.filter(e => !info(e.num).colour).length; if (unk) warns.push(`${unk} cards have no colour saved`);
@@ -1167,7 +1190,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.8 (card pictures everywhere) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.9 (resource cards) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
