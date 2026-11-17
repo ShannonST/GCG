@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B2033"/>
+      <stop offset="1" stop-color="#0B0D14"/>
+    </linearGradient>
+    <linearGradient id="holo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF6AD5"/>
+      <stop offset="0.2" stop-color="#C774E8"/>
+      <stop offset="0.4" stop-color="#7DD3FC"/>
+      <stop offset="0.6" stop-color="#7CF29C"/>
+      <stop offset="0.8" stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#FF8A65"/>
+    </linearGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4F6FA"/>
+      <stop offset="0.5" stop-color="#9AA3B5"/>
+      <stop offset="1" stop-color="#E3E7EE"/>
+    </linearGradient>
+    <clipPath id="front"><rect x="166" y="104" width="196" height="276" rx="16" transform="rotate(8 264 242)"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- back card -->
+  <rect x="130" y="128" width="196" height="276" rx="16" fill="url(#silver)" opacity="0.55" transform="rotate(-10 228 266)"/>
+  <!-- front card: chrome frame + holo face -->
+  <g transform="rotate(8 264 242)">
+    <rect x="166" y="104" width="196" height="276" rx="16" fill="url(#silver)"/>
+    <rect x="180" y="118" width="168" height="248" rx="10" fill="url(#holo)"/>
+    <!-- cost badge -->
+    <rect x="186" y="124" width="40" height="52" rx="6" fill="#0E1016" opacity="0.85"/>
+    <rect x="196" y="138" width="20" height="26" rx="3" fill="url(#holo)"/>
+    <!-- art window -->
+    <rect x="194" y="186" width="140" height="104" rx="6" fill="#0E1016" opacity="0.25"/>
+    <!-- spark -->
+    <path d="M264 204 L272 230 L298 238 L272 246 L264 272 L256 246 L230 238 L256 230 Z" fill="#FFFFFF"/>
+    <!-- text bars -->
+    <rect x="194" y="302" width="140" height="10" rx="5" fill="#FFFFFF" opacity="0.6"/>
+    <rect x="194" y="320" width="100" height="10" rx="5" fill="#FFFFFF" opacity="0.45"/>
+    <rect x="296" y="336" width="38" height="20" rx="4" fill="#0E1016" opacity="0.7"/>
+  </g>
+  <!-- chrome glare sweep -->
+  <g clip-path="url(#front)">
+    <rect x="120" y="60" width="70" height="420" fill="url(#chrome)" transform="rotate(28 256 256)"/>
+  </g>
+</svg>
