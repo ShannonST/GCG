@@ -1,6 +1,6 @@
 // GTCG My Card Collection — service worker
 // Keeps the app working offline and receives screenshots shared from other apps.
-const SHELL = 'gtcg-shell-v17';
+const SHELL = 'gtcg-shell-v18';
 const IMAGES = 'gtcg-card-pictures';
 const LIBS = 'gtcg-libs-v1';
 const SHARED = 'gtcg-shared';
@@ -8,7 +8,8 @@ const SHELL_FILES = ['./', './index.html', './catalog.json', './manifest.webmani
 const LIB_HOSTS = ['cdn.jsdelivr.net', 'docs.opencv.org', 'tessdata.projectnaptha.com'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's own 10-minute cache, so a new upload is picked up straight away
+  e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_FILES.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -64,7 +65,7 @@ self.addEventListener('fetch', e => {
 
   // The app itself: try the network first so updates arrive, fall back to the saved copy offline
   if (url.origin === location.origin) {
-    e.respondWith(fetch(e.request).then(res => {
+    e.respondWith(fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' }).then(res => {
       if (res.ok) caches.open(SHELL).then(c => c.put(e.request, res.clone()));
       return res;
     }).catch(() => caches.match(e.request).then(r => r || caches.match('./index.html'))));

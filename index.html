@@ -1449,7 +1449,12 @@ function liveReview() {
   // Not keeping your own photos: swap any old scan photos for the card pictures
   if (!S.settings.keepPhotos && Object.values(S.cards).some(c => c.photo)) { Object.values(S.cards).forEach(c => delete c.photo); await DB.put('kv', 'state', S).catch(() => {}); }
   await loadSeed(); rebuildCatalog(); render(); handleShared(); tidyPhotos();
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => { });
+    // when a new version takes over, reload once so it shows straight away
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !sessionStorage.getItem('gtcg-reloaded')) { sessionStorage.setItem('gtcg-reloaded', '1'); location.reload(); } });
+  }
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => { });
 })();
 </script>
