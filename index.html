@@ -163,7 +163,7 @@ const COLOURS = ['purple', 'blue', 'white', 'red', 'green'];
 const TYPES = ['Unit', 'Pilot', 'Command', 'Base', 'Resource', 'EX Resource', 'EX Base'];
 const RESOURCE_TYPES = new Set(['Resource', 'EX Resource', 'EX Base']); // these live in the separate resource deck, not the 50 cards
 const isResource = num => RESOURCE_TYPES.has(info(num).type);
-const RAR_SCORE = { LR: 5, R: 3.5, U: 2.5, C: 1.5 };
+const RAR_SCORE = { LR: 3.2, R: 2.6, U: 2.2, C: 1.8 }; // rarity is only a rough guide to strength — fitting the deck matters more
 
 // ---------- Card list ----------
 // catalog.json holds every card's facts (number, name, colour, type, level, cost, AP/HP, rarity,
@@ -1072,8 +1072,17 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
   const chosen = []; let pc = 0;
   for (const p of pilotsAll.filter(p => pilotValue(p) > 0).sort((a, b) => pilotValue(b) - pilotValue(a))) { if (pc >= pilotSlots) break; chosen.push(p); pc += Math.min(4, p.avail); }
   const linksChosen = u => chosen.some(p => linksTo(u, p));
+  // the deck's "faction": traits and series of the chosen pilots (e.g. Zeon/Marine, Gjallarhorn, Tekkadan)
+  const traitsOf = c => (c.trait || '').match(/\([^)]+\)/g) || [];
+  // traits shared by the pilots and the units that link with them, e.g. Char → Acguy/Z'Gok gives (Zeon) and (Marine)
+  const tcount = {}; for (const p of chosen) for (const u of units.filter(u => linksTo(u, p))) for (const t of new Set([...traitsOf(p), ...traitsOf(u)])) tcount[t] = (tcount[t] || 0) + Math.min(4, u.avail);
+  const deckTraits = new Set([...chosen.flatMap(traitsOf), ...Object.keys(tcount).filter(t => tcount[t] >= 4)]), deckSeries = new Set(chosen.map(p => p.series).filter(Boolean));
+  const fits = c => traitsOf(c).some(t => deckTraits.has(t));
   const score = c => {
     let s = base(c);
+    if (c.type !== 'Pilot' && chosen.length) {                                  // stick to the deck's faction instead of a bit of everything
+      if (fits(c)) s += 1.5; else if (c.series && deckSeries.has(c.series)) s += c.type === 'Command' ? 1.2 : 0.7; else s -= c.type === 'Command' ? 0.3 : 0.8;
+    }
     if (c.type === 'Unit' && linksChosen(c)) s += 3;                           // links with a pilot in this deck — the big one
     if (c.type === 'Unit' && c.link && !linksChosen(c)) s -= 2.5;              // its pilot isn't in the deck: only used if nothing better
     if (c.type === 'Pilot') s += chosen.includes(c) ? 3 + pilotValue(c) / 20 : -5; // pilots that link nothing are left out
@@ -1118,7 +1127,13 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
   const linkedCopies = cards.filter(e => pilotsIn.some(pe => linksTo(info(e.num), info(pe.num)))).reduce((t, e) => t + e.qty, 0);
   const unitCopies = cards.filter(e => info(e.num).type === 'Unit').reduce((t, e) => t + e.qty, 0);
   const unknown = cards.filter(e => info(e.num).lv == null && info(e.num).type === 'Unit').length; if (unknown) notes.push(`${unknown} units have no level saved — edit them for better builds`);
-  return { colour, cards, n, strength, avg, notes, linkedCopies, unitCopies, poolSize: pool.reduce((s, c) => s + c.avail, 0) };
+  // cards in the deck that don't fit its faction, and the best cards to buy to replace them
+  const offFaction = cards.filter(e => { const i = info(e.num); return i.type !== 'Pilot' && chosen.length && !fits(i) && !linksChosen(i) && !(i.series && deckSeries.has(i.series)); }).reduce((t, e) => t + e.qty, 0);
+  const upgrades = !chosen.length ? [] : Object.values(CATALOG).filter(c => cols.includes(c.colour) && (!theme || theme(c)) && !RESOURCE_TYPES.has(c.type) && !RULES.banned[c.num] && c.type !== 'Pilot'
+      && (linksChosen(c) || fits(c)) && playableByNum(c.num, incoming) < 4)
+    .map(c => ({ c, sc: score({ ...c, avail: 4 }), have: playableByNum(c.num, incoming) })).sort((a, b) => b.sc - a.sc).slice(0, 8)
+    .map(({ c, have }) => ({ num: c.num, name: c.name, need: 4 - have, usd: c.usd, why: linksChosen(c) ? 'links with ' + chosen.filter(p => linksTo(c, p)).map(p => p.name).join(' / ') : 'fits ' + traitsOf(c).filter(t => deckTraits.has(t)).join(' ') }));
+  return { colour, cards, n, strength, avg, notes, linkedCopies, unitCopies, offFaction, upgrades, poolSize: pool.reduce((s, c) => s + c.avail, 0) };
 }
 // A full 50-card deck: the best 50 cards from up to two colours (not tied to 25 + 25)
 function autoDeck(c1, c2, incoming, avoidUsed, theme = null) {
@@ -1140,6 +1155,8 @@ function showDeckSuggestion(r) {
     <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· ${counts.map(([c, n]) => `${n} ${c}`).join(' + ')} · ${r.linkedCopies} of ${r.unitCopies} units link with its pilots</span></p>
     <p class="small ${chk.errors.length ? 'warn' : 'ok'}">${chk.errors.length ? chk.errors.map(esc).join('<br>') : 'Legal deck — passes the rules and ban list'}</p>
     ${shapeLine(r.cards, 50)}
+    ${r.upgrades && r.upgrades.length ? `<details style="margin:8px 0"><summary class="small"><b>${r.offFaction ? r.offFaction + ' cards here don’t fit the deck’s pilots or faction.' : 'Want it stronger?'} Best cards to buy</b></summary>
+      <ul class="small muted" style="padding-left:18px;margin:6px 0">${r.upgrades.map(u => `<li><b>${esc(u.name)}</b> ${esc(u.num)} ×${u.need}${u.usd ? ` · about US$${u.usd < 10 ? u.usd.toFixed(2) : Math.round(u.usd)} each` : ''} — ${esc(u.why)}</li>`).join('')}</ul></details>` : ''}
     ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join('')}</div>
     <label class="f" for="dn">Deck name</label><input type="text" id="dn" value="${esc(name)} deck">
@@ -1162,6 +1179,8 @@ function showSuggestion(r) {
   openSheet(`<div class="row"><h3 class="grow">Suggested ${r.colour} core</h3><b class="${r.n === 25 ? 'ok' : 'warn'}">${r.n}/25</b></div>
     <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· ${r.linkedCopies} of ${r.unitCopies} units link with its pilots · built from ${r.poolSize} available ${r.colour} cards</span></p>
     ${shapeLine(r.cards, 25)}
+    ${r.upgrades && r.upgrades.length ? `<details style="margin:8px 0"><summary class="small"><b>${r.offFaction ? r.offFaction + ' cards here don’t fit the deck’s pilots or faction.' : 'Want it stronger?'} Best cards to buy</b></summary>
+      <ul class="small muted" style="padding-left:18px;margin:6px 0">${r.upgrades.map(u => `<li><b>${esc(u.name)}</b> ${esc(u.num)} ×${u.need}${u.usd ? ` · about US$${u.usd < 10 ? u.usd.toFixed(2) : Math.round(u.usd)} each` : ''} — ${esc(u.why)}</li>`).join('')}</ul></details>` : ''}
     ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join('')}</div>
     <label class="f" for="sn">Name</label><input type="text" id="sn" value="${esc(r.colour[0].toUpperCase() + r.colour.slice(1))} core">
@@ -1340,7 +1359,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.19 (themes) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.20 (faction focus, buy suggestions) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
