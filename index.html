@@ -1346,6 +1346,9 @@ function renderMore() {
     <h2>Spares for trading</h2>
     <p class="small muted">Cards you own beyond what your cores use${spareVal ? ` · rough value ${money(spareVal)}` : ''}.</p>
     ${spares.length ? `<div class="list">${spares.slice(0, 60).map(x => `<div class="li"><span class="dot" style="background:${colourVar(info(x.c.num).colour)}"></span><div class="grow"><div style="font-weight:600;font-size:14px">${esc(info(x.c.num).name)}</div><div class="small muted">${esc(x.c.num)}${x.c.price ? ` · ${money(x.c.price.median)} each` : ''}</div></div><b>×${x.spare}</b></div>`).join('')}</div>` : '<p class="small muted">No spares yet.</p>'}
+    <h2>Export</h2>
+    <p class="small muted">A tidy PDF list of your collection — to print, keep, or send to someone for trades.</p>
+    <button class="btn ghost" id="pdfBtn" style="width:100%">Collection as PDF</button>
     <h2>Backup</h2>
     <p class="small muted">Saves everything (cards, cores, decks, prices and your photos) as one file. Share it to Gmail to email it to yourself.</p>
     <div class="row" style="gap:8px"><button class="btn grow" id="bk">Back up now</button><label class="btn ghost" style="display:inline-flex;align-items:center">Restore<input type="file" accept=".json,application/json" id="rs" hidden></label></div>
@@ -1359,7 +1362,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.20 (faction focus, buy suggestions) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.21 (PDF export) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
@@ -1367,6 +1370,7 @@ function renderMore() {
   $('#stQ').onchange = e => { S.settings.quality = e.target.value; save(); };
   $('#stKeep').onchange = e => { S.settings.keepPhotos = e.target.checked; save(); };
   const dp = $('#stDelPh'); if (dp) dp.onclick = async () => { Object.values(S.cards).forEach(c => delete c.photo); save(); await tidyPhotos(); renderMore(); toast('Photos removed — showing card pictures'); };
+  $('#pdfBtn').onclick = pdfOptions;
   $('#bk').onclick = backup;
   $('#rs').onchange = e => restore(e.target.files[0]);
   $('#cl').onchange = e => importCatalog(e.target.files[0]);
@@ -1383,6 +1387,44 @@ async function backup() {
   const data = JSON.stringify({ app: 'gtcg', version: 1, exported: new Date().toISOString(), state: S, photos });
   const name = `gtcg-backup-${today()}.json`;
   await shareOrDownload(new Blob([data], { type: 'application/json' }), name, `GCG backup ${fmtDate(today())}`);
+}
+// ---------- PDF export ----------
+function pdfOptions() {
+  openSheet(`<h3>Collection as PDF</h3>
+    <label class="f"><input type="checkbox" id="pxInc" checked style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Include cards on the way</label>
+    <label class="f"><input type="checkbox" id="pxRes" checked style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Include resource cards</label>
+    <label class="f"><input type="checkbox" id="pxVal" checked style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show rough prices</label>
+    <label class="f" for="pxCol">Colours</label><select id="pxCol"><option value="">All colours</option>${COLOURS.map(c => `<option value="${c}">${c[0].toUpperCase() + c.slice(1)} only</option>`).join('')}</select>
+    <button class="btn" id="pxGo" style="width:100%;margin-top:14px">Make PDF</button>`, () => {
+    $('#pxGo').onclick = async () => { $('#pxGo').disabled = true; $('#pxGo').textContent = 'Making PDF…';
+      try { await exportPDF({ inc: $('#pxInc').checked, res: $('#pxRes').checked, val: $('#pxVal').checked, colour: $('#pxCol').value }); closeSheet(); }
+      catch (e) { console.warn(e); toast('Couldn’t make the PDF — check your internet (first time downloads the PDF maker)', 4000); $('#pxGo').disabled = false; $('#pxGo').textContent = 'Make PDF'; } };
+  });
+}
+async function exportPDF({ inc, res, val, colour }) {
+  if (!window.jspdf) await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
+  if (!window.jspdf.jsPDF.API.autoTable) await loadScript('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js');
+  const order = [...COLOURS, ''], cap = t => t ? t[0].toUpperCase() + t.slice(1) : 'Other';
+  const rows = Object.values(S.cards).filter(c => (c.owned || 0) + (inc ? c.incoming || 0 : 0) > 0)
+    .filter(c => res || !RESOURCE_TYPES.has(info(c.num).type)).filter(c => !colour || info(c.num).colour === colour)
+    .sort((a, b) => order.indexOf(info(a.num).colour || '') - order.indexOf(info(b.num).colour || '') || a.num.localeCompare(b.num) || (a.collector ? 1 : 0) - (b.collector ? 1 : 0));
+  if (!rows.length) { toast('Nothing to export with those options'); throw new Error('empty'); }
+  const ver = c => { if (!c.collector) return 'Normal'; const alt = (info(c.num).alts || []).find(([pid]) => String(pid) === String(c.art)); return alt ? alt[1] : (c.rarity || 'Collector'); };
+  const price = c => { const i = info(c.num); if (!c.collector) return i.usd || 0; const alt = (i.alts || []).find(([pid]) => String(pid) === String(c.art)); return (alt && alt[2]) || i.usdPlus || 0; };
+  const sl = c => c.sleeved === 'double' ? '2×' : c.sleeved ? '1×' : '';
+  const { jsPDF } = window.jspdf, doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const tot = rows.reduce((t, c) => t + (c.owned || 0), 0), totIn = rows.reduce((t, c) => t + (c.incoming || 0), 0), totVal = rows.reduce((t, c) => t + price(c) * ((c.owned || 0) + (inc ? c.incoming || 0 : 0)), 0);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.text('GTCG My Card Collection', 14, 16);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  doc.text(`${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })} · ${tot} cards owned${inc && totIn ? ` · ${totIn} on the way` : ''} · ${rows.length} entries${colour ? ' · ' + cap(colour) + ' only' : ''}${val && totVal ? ` · rough value US$${Math.round(totVal)}` : ''}`, 14, 22);
+  const head = [['Number', 'Name', 'Type', 'Lv', 'Version', 'Own', ...(inc ? ['Coming'] : []), 'Sleeve', ...(val ? ['US$ ea'] : [])]];
+  const body = []; let lastCol = null;
+  for (const c of rows) { const i = info(c.num);
+    if ((i.colour || '') !== lastCol) { lastCol = i.colour || ''; body.push([{ content: cap(lastCol), colSpan: head[0].length, styles: { fontStyle: 'bold', fillColor: [235, 230, 245] } }]); }
+    body.push([c.num, i.name || '', i.type || '', i.lv ?? '', ver(c), c.owned || 0, ...(inc ? [c.incoming || ''] : []), sl(c), ...(val ? [price(c) ? price(c).toFixed(2) : ''] : [])]); }
+  doc.autoTable({ head, body, startY: 27, styles: { fontSize: 8.5, cellPadding: 1.4 }, headStyles: { fillColor: [80, 60, 140] }, columnStyles: { 1: { cellWidth: 62 } },
+    didDrawPage: d => { doc.setFontSize(8); doc.setTextColor(140); doc.text(`Page ${doc.internal.getNumberOfPages()}`, 196, 290, { align: 'right' }); doc.setTextColor(0); } });
+  await shareOrDownload(doc.output('blob'), `my-gundam-cards-${new Date().toISOString().slice(0, 10)}.pdf`, 'My Gundam card collection');
 }
 async function shareOrDownload(blob, name, title) {
   const file = new File([blob], name, { type: blob.type });
