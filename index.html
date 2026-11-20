@@ -1011,28 +1011,45 @@ function renderBuild() {
 }
 
 // --- the rule-based core builder ---
+// Does this unit link with this pilot? A unit's link is a pilot's name, or a trait like "(Tekkadan) Trait"; "/" means either.
+const linkParts = u => (u.link || '').split(/\s*\/\s*/).map(x => x.trim()).filter(Boolean);
+function linksTo(u, p) {
+  if (!u || !p || u.type !== 'Unit') return false;
+  const pn = (p.name || '').toLowerCase(), pt = (p.trait || '').toLowerCase();
+  return linkParts(u).some(l => /trait$/i.test(l) ? pt.includes(l.replace(/\s*trait$/i, '').trim().toLowerCase()) : l.toLowerCase() === pn);
+}
 function autoBuild(colour, incoming, avoidUsed, other = [], size = 25) { // other = the deck's other half; colour may be a list of colours; size 25 (core) or 50 (whole deck)
   const cols = Array.isArray(colour) ? colour : [colour];
   const usedElsewhere = {}; if (avoidUsed) for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) usedElsewhere[e.num] = (usedElsewhere[e.num] || 0) + e.qty;
   for (const e of other) usedElsewhere[e.num] = (usedElsewhere[e.num] || 0) + e.qty;
   const otherNums = new Set(other.map(e => e.num)), otherQty = {}; for (const e of other) otherQty[e.num] = (otherQty[e.num] || 0) + e.qty; // max 4 copies across the whole deck
   const pool = Object.values(CATALOG).filter(c => cols.includes(c.colour) && !RESOURCE_TYPES.has(c.type) && !RULES.banned[c.num]).map(c => ({ ...c, avail: Math.max(0, playableByNum(c.num, incoming) - (usedElsewhere[c.num] || 0)) })).filter(c => c.avail > 0);
-  const ownedPilots = new Set(pool.filter(c => c.type === 'Pilot').map(c => c.name.toLowerCase()));
-  const linkedUnits = new Set(pool.filter(c => c.type === 'Unit' && c.link).map(c => c.link.toLowerCase()));
-  const score = c => {
+  const base = c => {
     let s = RAR_SCORE[(c.rarity || '').replace(/\+/g, '')] || 2;
-    if (c.type === 'Unit' && c.link && ownedPilots.has(c.link.toLowerCase())) s += 1.5;   // can link with a pilot you own
-    if (c.type === 'Pilot' && linkedUnits.has(c.name.toLowerCase())) s += 2;              // pilot that links your units
     if (c.avail >= 4) s += 0.5;                                                            // full playset = more consistent
     if (c.type === 'Unit' && c.cost != null && c.ap != null) s += Math.max(-1, Math.min(1, ((c.ap + c.hp) / Math.max(1, c.cost) - 3) / 2)); // stats for the cost
     if (c.lv == null && c.type === 'Unit') s -= 0.3;
+    return s;
+  };
+  // Pick the pilots first: the ones that link with the most (and best) units you own in these colours
+  const units = pool.filter(c => c.type === 'Unit'), pilotsAll = pool.filter(c => c.type === 'Pilot');
+  const pilotValue = p => units.filter(u => linksTo(u, p)).reduce((t, u) => t + base(u) * Math.min(4, u.avail), 0);
+  const pilotSlots = Math.round(4 * size / 25);
+  const chosen = []; let pc = 0;
+  for (const p of pilotsAll.filter(p => pilotValue(p) > 0).sort((a, b) => pilotValue(b) - pilotValue(a))) { if (pc >= pilotSlots) break; chosen.push(p); pc += Math.min(4, p.avail); }
+  const linksChosen = u => chosen.some(p => linksTo(u, p));
+  const score = c => {
+    let s = base(c);
+    if (c.type === 'Unit' && linksChosen(c)) s += 3;                           // links with a pilot in this deck — the big one
+    if (c.type === 'Unit' && c.link && !linksChosen(c)) s -= 0.5;              // needs a pilot you don't have
+    if (c.type === 'Pilot') s += chosen.includes(c) ? 3 + pilotValue(c) / 20 : -5; // pilots that link nothing are left out
     return s;
   };
   const plan = [ // [label, filter, target copies, max per card]
     ['Early units (Lv ≤3)', c => c.type === 'Unit' && c.lv != null && c.lv <= 3, 7, 4],
     ['Mid units (Lv 4–5)', c => c.type === 'Unit' && c.lv != null && c.lv >= 4 && c.lv <= 5, 6, 4],
     ['Finishers (Lv 6+)', c => c.type === 'Unit' && c.lv != null && c.lv >= 6, 3, 3],
-    ['Pilots', c => c.type === 'Pilot', 4, 4],
+    ['Pilots', c => c.type === 'Pilot' && chosen.includes(c), 4, 4],
     ['Commands', c => c.type === 'Command', 3, 3],
     ['Base', c => c.type === 'Base', 2, 2],
   ];
@@ -1045,17 +1062,28 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25) { // othe
     let got = 0; for (const c of pool.filter(f).sort((a, b) => score(b) - score(a))) { if (got >= tgt || total() >= size) break; got += take(c, Math.min(cp, tgt - got)); }
     if (got < tgt) notes.push(`Only ${got} of ${tgt} ${label.toLowerCase()}`);
   }
-  if (total() < size) for (const c of pool.slice().sort((a, b) => score(b) - score(a))) { if (total() >= size) break; take(c, size - total()); }
+  const fill = () => { if (total() < size) for (const c of pool.filter(c => c.type !== 'Pilot' || chosen.includes(c)).sort((a, b) => score(b) - score(a))) { if (total() >= size) break; take(c, size - total()); } };
+  fill();
+  // any pilot whose units didn't make it in is dead weight: swap it out
+  for (const num of Object.keys(picked)) { const p = info(num); if (p.type !== 'Pilot') continue;
+    if (!Object.keys(picked).some(u => linksTo(info(u), p))) { left[num] += picked[num]; delete picked[num]; const i = chosen.findIndex(c => c.num === num); if (i >= 0) chosen.splice(i, 1); } }
+  fill();
+  if (!chosen.length && pilotsAll.length) notes.push('None of your pilots in these colours link with your units — no pilots added');
   // banned pairs inside the core
   for (const [x, y] of RULES.bannedPairs) if (picked[x] && picked[y]) { const drop = score(info(x)) < score(info(y)) ? x : y; delete picked[drop]; notes.push(`Removed ${info(drop).name} (banned with ${info(drop === x ? y : x).name})`); }
   const cards = Object.entries(picked).map(([num, qty]) => ({ num, qty })).sort(sortByCurve);
   const n = cards.reduce((s, e) => s + e.qty, 0);
   const avg = n ? cards.reduce((s, e) => s + score({ ...info(e.num), avail: e.qty }) * e.qty, 0) / n : 0;
   const strength = n < size ? 'Not enough cards' : avg >= 4 ? 'Strong' : avg >= 3 ? 'Solid' : avg >= 2.3 ? 'Budget' : 'Starter level';
-  const links = cards.filter(e => { const i = info(e.num); return i.type === 'Unit' && i.link && cards.some(p => info(p.num).name.toLowerCase() === i.link.toLowerCase()); }).map(e => info(e.num).name);
-  if (links.length) notes.unshift(`Link units ready: ${[...new Set(links)].slice(0, 4).join(', ')}`);
+  // spell out the pairings so you can see they work together
+  const pilotsIn = cards.filter(e => info(e.num).type === 'Pilot');
+  for (const pe of pilotsIn.slice().reverse()) { const p = info(pe.num), us = cards.filter(e => linksTo(info(e.num), p));
+    const nm = e => info(e.num).name + (us.filter(x => info(x.num).name === info(e.num).name).length > 1 ? ` (${e.num})` : '');
+    notes.unshift(`${p.name} ×${pe.qty} links with ${us.map(e => `${nm(e)} ×${e.qty}`).join(', ')}`); }
+  const linkedCopies = cards.filter(e => pilotsIn.some(pe => linksTo(info(e.num), info(pe.num)))).reduce((t, e) => t + e.qty, 0);
+  const unitCopies = cards.filter(e => info(e.num).type === 'Unit').reduce((t, e) => t + e.qty, 0);
   const unknown = cards.filter(e => info(e.num).lv == null && info(e.num).type === 'Unit').length; if (unknown) notes.push(`${unknown} units have no level saved — edit them for better builds`);
-  return { colour, cards, n, strength, avg, notes, poolSize: pool.reduce((s, c) => s + c.avail, 0) };
+  return { colour, cards, n, strength, avg, notes, linkedCopies, unitCopies, poolSize: pool.reduce((s, c) => s + c.avail, 0) };
 }
 // A full 50-card deck: the best 50 cards from up to two colours (not tied to 25 + 25)
 function autoDeck(c1, c2, incoming, avoidUsed) {
@@ -1074,7 +1102,7 @@ function showDeckSuggestion(r) {
   // check it as a deck
   S.cores._A = { id: '_A', cards: r.cards }; S.cores._B = { id: '_B', cards: [] }; const chk = checkDeck({ id: '_p', a: '_A', b: '_B' }); delete S.cores._A; delete S.cores._B;
   openSheet(`<div class="row"><h3 class="grow">Suggested deck: ${esc(name)}</h3><b class="${r.n === 50 ? 'ok' : 'warn'}">${r.n}/50</b></div>
-    <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· ${counts.map(([c, n]) => `${n} ${c}`).join(' + ')}</span></p>
+    <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· ${counts.map(([c, n]) => `${n} ${c}`).join(' + ')} · ${r.linkedCopies} of ${r.unitCopies} units link with its pilots</span></p>
     <p class="small ${chk.errors.length ? 'warn' : 'ok'}">${chk.errors.length ? chk.errors.map(esc).join('<br>') : 'Legal deck — passes the rules and ban list'}</p>
     ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join('')}</div>
@@ -1096,7 +1124,7 @@ function showDeckSuggestion(r) {
 function showSuggestion(r) {
   if (!r.cards.length) return openSheet(`<h3>Can't build a ${r.colour} core yet</h3><p class="muted">You don't have any free ${r.colour} cards. Scan some in, or untick "Don't use cards already in my other cores".</p>`);
   openSheet(`<div class="row"><h3 class="grow">Suggested ${r.colour} core</h3><b class="${r.n === 25 ? 'ok' : 'warn'}">${r.n}/25</b></div>
-    <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· built from ${r.poolSize} available ${r.colour} cards</span></p>
+    <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· ${r.linkedCopies} of ${r.unitCopies} units link with its pilots · built from ${r.poolSize} available ${r.colour} cards</span></p>
     ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join('')}</div>
     <label class="f" for="sn">Name</label><input type="text" id="sn" value="${esc(r.colour[0].toUpperCase() + r.colour.slice(1))} core">
@@ -1256,7 +1284,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.15 (best-50 deck builder) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.16 (pilot links) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
