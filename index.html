@@ -73,6 +73,14 @@ nav.tabs .scanbtn span.c{width:48px;height:48px;border-radius:16px;background:va
 .toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:#0E1016;padding:10px 16px;border-radius:12px;font-weight:600;z-index:60;display:none;max-width:90vw;text-align:center}
 .cam{position:fixed;inset:0;background:#000;z-index:50;display:none;flex-direction:column}
 .cam.on{display:flex}
+.live .box{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);width:62vw;max-width:360px;height:15vw;max-height:86px;border:3px solid #fff;border-radius:12px;box-shadow:0 0 0 9999px #0008;transition:border-color .15s}
+.live .box.hit{border-color:#5BE38A}
+.live .read{position:absolute;left:0;right:0;top:calc(38% + 11vw + 14px);text-align:center;color:#fff;font:600 15px/1.3 system-ui;text-shadow:0 1px 3px #000;padding:0 16px}
+.live .panel{position:absolute;left:10px;right:10px;bottom:calc(84px + env(safe-area-inset-bottom));background:#15171f;border:1px solid #2a2d38;border-radius:16px;padding:12px;display:none;color:#fff}
+.live .panel.on{display:block}
+.live .qty{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
+.live .qty button{padding:14px 0;font-size:20px;font-weight:700}
+.live .count{position:absolute;right:14px;top:calc(14px + env(safe-area-inset-top));background:#A678F0;color:#111;border-radius:999px;padding:6px 12px;font-weight:700}
 .cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .cam .frame{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);width:76vw;max-width:420px;aspect-ratio:63/88;border:3px solid #fff;border-radius:14px;box-shadow:0 0 0 9999px #0009}
 .cam .hint{position:absolute;top:calc(16px + env(safe-area-inset-top));left:0;right:0;text-align:center;color:#fff;font-weight:600;text-shadow:0 1px 3px #000}
@@ -109,6 +117,18 @@ nav.tabs .scanbtn span.c{width:48px;height:48px;border-radius:16px;background:va
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
 
+<div class="cam live" id="live">
+  <video id="lvVideo" playsinline muted autoplay></video>
+  <div class="hint" style="text-align:left;padding:0 120px 0 16px">Fit the card number inside the box</div>
+  <div class="count" id="lvCount">0 cards</div>
+  <div class="box" id="lvBox"></div>
+  <div class="read" id="lvRead">Starting camera…</div>
+  <div class="panel" id="lvPanel"></div>
+  <div class="bar">
+    <button class="btn ghost" id="lvClose" style="background:#0008;color:#fff;border-color:#fff6">Cancel</button>
+    <button class="btn" id="lvDone">Done — review</button>
+  </div>
+</div>
 <div class="cam" id="cam">
   <video id="video" playsinline muted autoplay></video>
   <div class="frame"></div>
@@ -252,7 +272,7 @@ function closeSheet() { $('#sheetBg').classList.remove('on'); $('#sheet').innerH
 $('#sheetBg').onclick = e => { if (e.target.id === 'sheetBg') closeSheet(); };
 
 /* =========================== COLLECTION =========================== */
-let FILTER = { q: '', colour: '' };
+let FILTER = { q: '', colour: '', coming: false };
 let SELECT = null; // a Set of card keys while bulk-selecting
 function renderCollection() {
   const all = Object.entries(S.cards).filter(([, c]) => (c.owned || 0) + (c.incoming || 0) > 0);
@@ -260,11 +280,11 @@ function renderCollection() {
   const coming = all.reduce((s, [, c]) => s + (c.incoming || 0), 0);
   const buy = Object.entries(needs('target')).reduce((s, [n, q]) => s + Math.max(0, q - ownedByNum(n, true)), 0);
   const q = FILTER.q.toLowerCase();
-  const rows = all.filter(([, c]) => { const i = info(c.num); return (!FILTER.colour || (FILTER.colour === 'res' ? RESOURCE_TYPES.has(i.type) : i.colour === FILTER.colour)) && (!q || i.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q)); })
+  const rows = all.filter(([, c]) => { const i = info(c.num); return (!FILTER.coming || (c.incoming || 0) > 0) && (!FILTER.colour || (FILTER.colour === 'res' ? RESOURCE_TYPES.has(i.type) : i.colour === FILTER.colour)) && (!q || i.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q)); })
     .sort((a, b) => { const A = info(a[1].num), B = info(b[1].num); return (COLOURS.indexOf(A.colour) - COLOURS.indexOf(B.colour)) || a[1].num.localeCompare(b[1].num); });
   $('#app').innerHTML = `
   <div class="top"><div class="row"><h1 class="grow">My Collection</h1>${all.length ? `<button class="btn ${SELECT ? '' : 'ghost'} sm" id="selMode">${SELECT ? 'Done' : 'Select'}</button>` : ''}</div>
-    <div class="stats"><div class="stat"><b>${owned}</b><span class="small muted">cards owned</span></div><div class="stat"><b>${coming}</b><span class="small muted">on the way</span></div><div class="stat"><b class="${buy ? 'warn' : ''}">${buy}</b><span class="small muted">to buy</span></div></div>
+    <div class="stats"><div class="stat"><b>${owned}</b><span class="small muted">cards owned</span></div><button class="stat" id="stComing" style="text-align:left;font:inherit;color:inherit;${FILTER.coming ? 'outline:2px solid var(--accent);' : ''}"><b>${coming}</b><span class="small muted">on the way${coming ? (FILTER.coming ? ' · showing' : ' · tap to see') : ''}</span></button><div class="stat"><b class="${buy ? 'warn' : ''}">${buy}</b><span class="small muted">to buy</span></div></div>
     <input type="search" id="q" placeholder="Search name or number" value="${esc(FILTER.q)}" aria-label="Search cards">
     <div class="chips" style="margin-top:8px">${['', ...COLOURS, 'res'].map(c => `<button class="chip ${FILTER.colour === c ? 'on' : ''}" data-col="${c}">${c === 'res' ? 'Resources' : c ? c[0].toUpperCase() + c.slice(1) : 'All'}</button>`).join('')}</div>
   </div>
@@ -272,6 +292,16 @@ function renderCollection() {
       : `<div class="empty"><b>Your collection is empty</b>Tap the scan button below to add your first card, or add one by hand.<br><br><button class="btn" data-act="add">Add a card by hand</button></div>`}</div>`;
   $('#q').oninput = e => { FILTER.q = e.target.value; const pos = e.target.selectionStart; renderCollection(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
   document.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { FILTER.colour = b.dataset.col; renderCollection(); });
+  $('#stComing').onclick = () => { if (!coming && !FILTER.coming) return toast('Nothing on the way'); FILTER.coming = !FILTER.coming; renderCollection(); };
+  if (FILTER.coming) { // banner with a one-tap "they've arrived"
+    const w = $('#app').querySelector('.wrap'), ban = document.createElement('div'); ban.className = 'row'; ban.style.cssText = 'gap:8px;margin-bottom:10px;align-items:center';
+    ban.innerHTML = `<span class="grow small">Showing ${coming} card${coming === 1 ? '' : 's'} on the way. Tap one to change it.</span><button class="btn sm" id="allArrived">All arrived</button><button class="btn ghost sm" id="comingOff">Show all</button>`;
+    w.prepend(ban);
+    $('#comingOff').onclick = () => { FILTER.coming = false; renderCollection(); };
+    $('#allArrived').onclick = () => { if (!confirm(`Move all ${coming} cards on the way into your collection?`)) return;
+      for (const c of Object.values(S.cards)) if (c.incoming) { c.owned = (c.owned || 0) + c.incoming; c.incoming = 0; }
+      FILTER.coming = false; save(); renderCollection(); toast('Moved into your collection'); };
+  }
   const sm = $('#selMode'); if (sm) sm.onclick = () => { SELECT = SELECT ? null : new Set(); renderCollection(); };
   if (SELECT) {
     const shown = rows.map(([k]) => k), allOn = shown.length && shown.every(k => SELECT.has(k));
@@ -366,11 +396,13 @@ function searchString(nums) { const base = nums.length > 1 ? `(${nums.join(',')}
 /* =========================== SCAN =========================== */
 let stream = null;
 function startScan() { // the phone's own camera app takes far better photos than an in-app preview
-  openSheet(`<h3>Scan cards</h3><p class="small muted">One card or several in one photo. Lay them flat on a plain table, not touching, and fill the photo with them.</p>
+  openSheet(`<h3>Live scan — fastest</h3><p class="small muted">Point the camera at card numbers one after another. It reads them as you go, asks how many, and adds them all at the end.</p>
+    <button class="btn" id="scLive" style="width:100%;margin:6px 0 16px">Start live scan</button>
+    <h3>Scan cards</h3><p class="small muted">One card or several in one photo. Lay them flat on a plain table, not touching, and fill the photo with them.</p>
     <div class="row" style="gap:8px;margin-top:10px"><button class="btn grow" id="scCam">Take photo</button><button class="btn ghost grow" id="scGal">Choose from gallery</button></div>
     <h3 style="margin-top:18px">Quick: number only</h3><p class="small muted">Take a close-up of just the card number in the top-right corner. Fill the photo with it, straight on, no glare.</p>
     <button class="btn ghost" id="scNum" style="width:100%;margin-top:6px">Photo the number</button>`, () => {
-    $('#scCam').onclick = () => { $('#camShoot').click(); }; $('#scGal').onclick = () => { $('#camPick').click(); }; $('#scNum').onclick = () => { $('#numShoot').click(); };
+    $('#scCam').onclick = () => { $('#camShoot').click(); }; $('#scGal').onclick = () => { $('#camPick').click(); }; $('#scNum').onclick = () => { $('#numShoot').click(); }; $('#scLive').onclick = () => { closeSheet(); startLive(); };
   });
   loadOpenCV(); loadTesseract(); // start downloading helpers in the background
 }
@@ -403,15 +435,8 @@ $('#numShoot').onchange = async e => { const f = e.target.files[0]; e.target.val
   closeSheet(); openConfirm({ num: read.num, readOk: !!read.num, guess: !!read.num && !read.sure, alts: read.sure ? [] : read.alts, numOnly: true });
   if (read.noReader) toast('Text reader didn’t download — check your internet and try again', 4000);
 };
-// A close-up of the number: read the whole photo several ways and match against the card list
-async function ocrNumberOnly(canvas) {
-  const w = await Promise.race([loadTesseract(), new Promise(r => setTimeout(() => r(null), 90000))]);
-  if (!w) return { num: '', noReader: true };
-  try {
-    const readings = [];
-    const filters = ['grayscale(1) contrast(1.6)', 'grayscale(1) contrast(2.5) invert(1)', 'grayscale(1) blur(1px) contrast(3) invert(1)'];
-    // the number sits on a black tab: find the dark area and read that closely too
-    const tab = (() => { const k = Math.min(1, 300 / canvas.width), t = document.createElement('canvas'); t.width = Math.round(canvas.width * k); t.height = Math.round(canvas.height * k);
+function darkTab(canvas) { // where's the dark strip the number is printed on? (fractions of the picture, or null)
+  return (() => { const k = Math.min(1, 300 / canvas.width), t = document.createElement('canvas'); t.width = Math.round(canvas.width * k); t.height = Math.round(canvas.height * k);
       const x = t.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0, t.width, t.height); const d = x.getImageData(0, 0, t.width, t.height).data;
       let tot = 0; for (let i = 0; i < d.length; i += 4) tot += d[i] + d[i + 1] + d[i + 2]; const lim = Math.min(300, tot / (d.length / 4) * 0.6); // 'dark' = well below this photo's average
       const rows = new Array(t.height).fill(0), cols = new Array(t.width).fill(0);
@@ -424,6 +449,16 @@ async function ocrNumberOnly(canvas) {
       for (let y = best[0]; y < best[1]; y++) for (let xx = 0; xx < t.width; xx++) { const i = (y * t.width + xx) * 4; if (d[i] + d[i + 1] + d[i + 2] < lim) cc[xx]++; }
       const cx = cc.map((v, i) => v > (best[1] - best[0]) * 0.6 ? i : -1).filter(i => i >= 0); if (cx.length < t.width * 0.15) return null;
       return [Math.max(0, cx[0] / t.width - .02), Math.max(0, best[0] / t.height - .03), Math.min(1, cx[cx.length - 1] / t.width + .02), Math.min(1, best[1] / t.height + .03)]; })();
+}
+// A close-up of the number: read the whole photo several ways and match against the card list
+async function ocrNumberOnly(canvas) {
+  const w = await Promise.race([loadTesseract(), new Promise(r => setTimeout(() => r(null), 90000))]);
+  if (!w) return { num: '', noReader: true };
+  try {
+    const readings = [];
+    const filters = ['grayscale(1) contrast(1.6)', 'grayscale(1) contrast(2.5) invert(1)', 'grayscale(1) blur(1px) contrast(3) invert(1)'];
+    // the number sits on a black tab: find the dark area and read that closely too
+    const tab = darkTab(canvas);
     const areas = [[0, 0, 1, 1], [0, 0, 1, .45], [.3, 0, 1, .35], [0, .15, 1, .85]]; if (tab) areas.unshift(tab);
     for (const r of areas) for (const f of filters) {
       const sc = Math.min(3, 1200 / (canvas.width * (r[2] - r[0])));
@@ -1192,7 +1227,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.10 (resource scan fix) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.12 (live scan) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
@@ -1257,6 +1292,114 @@ async function handleShared() {
 async function tidyPhotos() {
   try { const used = new Set(Object.values(S.cards).map(c => c.photo).filter(Boolean));
     for (const k of await DB.keys('photos')) if (!used.has(k)) { await DB.del('photos', k); if (photoURLs[k]) { URL.revokeObjectURL(photoURLs[k]); delete photoURLs[k]; } } } catch { }
+}
+// ---------- Live scan: read numbers straight from the camera ----------
+const LIVE = { on: false, stream: null, worker: null, busy: false, list: [], recent: [], pending: null, ignore: '', ignoreUntil: 0, lastSeen: 0 };
+async function liveWorker() { // a separate reader tuned for one short line of card-number characters (much faster)
+  if (LIVE.worker) return LIVE.worker;
+  await loadTesseract(); if (!window.Tesseract) return null;
+  const w = await Tesseract.createWorker('eng');
+  await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: 'ABCDEGPRSTX0123456789-' });
+  return (LIVE.worker = w);
+}
+async function startLive() {
+  try { const saved = JSON.parse(localStorage.getItem('gtcg-live') || '[]'); if (Array.isArray(saved)) LIVE.list = saved; } catch { }
+  $('#live').classList.add('on'); LIVE.on = true; liveCount(); $('#lvPanel').classList.remove('on'); LIVE.pending = null;
+  try {
+    LIVE.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+    $('#lvVideo').srcObject = LIVE.stream;
+    const tr = LIVE.stream.getVideoTracks()[0], caps = tr.getCapabilities ? tr.getCapabilities() : {}, adv = {};
+    if (caps.focusMode?.includes('continuous')) adv.focusMode = 'continuous';
+    if (caps.zoom && caps.zoom.max >= 2) adv.zoom = Math.min(2, caps.zoom.max); // a little zoom lets you hold the card further away, where it can focus
+    if (Object.keys(adv).length) tr.applyConstraints({ advanced: [adv] }).catch(() => {});
+  } catch { $('#lvRead').textContent = 'Camera not available'; return; }
+  $('#lvRead').textContent = window.Tesseract && LIVE.worker ? 'Looking for a number…' : 'Getting the reader ready (first time downloads a few MB)…';
+  await liveWorker();
+  if (LIVE.on) { $('#lvRead').textContent = 'Looking for a number…'; liveLoop(); }
+}
+function stopLive() { LIVE.on = false; LIVE.stream?.getTracks().forEach(t => t.stop()); LIVE.stream = null; $('#live').classList.remove('on'); }
+function liveSave() { try { localStorage.setItem('gtcg-live', JSON.stringify(LIVE.list)); } catch { } }
+function liveCount() { const n = LIVE.list.reduce((s, e) => s + e.qty, 0); $('#lvCount').textContent = `${n} card${n === 1 ? '' : 's'}`; }
+function liveGrab() { // the part of the picture inside the on-screen box, enlarged for reading
+  const v = $('#lvVideo'); if (!v.videoWidth) return null;
+  const b = $('#lvBox').getBoundingClientRect(), r = v.getBoundingClientRect();
+  const sc = Math.max(r.width / v.videoWidth, r.height / v.videoHeight), ox = (r.width - v.videoWidth * sc) / 2, oy = (r.height - v.videoHeight * sc) / 2;
+  const x = (b.left - r.left - ox) / sc, y = (b.top - r.top - oy) / sc, w = b.width / sc, h = b.height / sc;
+  const c = document.createElement('canvas'), k = Math.min(3, 900 / w); c.width = Math.round(w * k); c.height = Math.round(h * k);
+  const ctx = c.getContext('2d'); ctx.filter = 'grayscale(1) contrast(1.8)'; ctx.drawImage(v, x, y, w, h, 0, 0, c.width, c.height); return c;
+}
+async function liveLoop() {
+  let flip = 0;
+  while (LIVE.on) {
+    if (LIVE.pending || !LIVE.worker) { await new Promise(r => setTimeout(r, 150)); continue; }
+    let c = liveGrab(); if (!c) { await new Promise(r => setTimeout(r, 150)); continue; }
+    // take turns: the whole box, the dark strip the number sits on, and the middle of the box
+    const mode = flip++ % 3, t = mode === 1 ? darkTab(c) : mode === 2 ? [.08, .12, .92, .88] : null;
+    if (t) { const n = document.createElement('canvas'), w = (t[2] - t[0]) * c.width, h = (t[3] - t[1]) * c.height, k = Math.min(3, 900 / w);
+      n.width = w * k; n.height = h * k; n.getContext('2d').drawImage(c, t[0] * c.width, t[1] * c.height, w, h, 0, 0, n.width, n.height); c = n; }
+    let text = '';
+    try { text = (await LIVE.worker.recognize(c)).data.text; } catch { }
+    if (!LIVE.on || LIVE.pending) continue;
+    const usable = text.replace(/[^A-Z0-9]/gi, '').length >= 4;
+    const pick = usable ? pickCard([text], '', '') : { num: '' };
+    const top = usable ? (window.lastPick || []) : [];
+    // lock on when the same number reads cleanly twice in a row (or once, very cleanly)
+    // lock on when the same number keeps coming up: twice if it's a clean read, three times if it's a close one
+    let hit = '';
+    const cand = top[0] && top[0][0] <= 1.3 ? top[0][1] : '';
+    LIVE.recent.push(cand ? cand + (pick.sure ? '!' : '') : ''); LIVE.recent = LIVE.recent.slice(-4);
+    if (cand) { const same = LIVE.recent.filter(n => n.replace('!', '') === cand), sure = same.filter(n => n.endsWith('!')).length;
+      if (sure >= 2 || same.length >= 3 || top[0][0] <= 0.05) hit = cand; }
+    const now = Date.now();
+    if (hit && hit === LIVE.ignore && now < LIVE.ignoreUntil) { LIVE.ignoreUntil = now + 1500; $('#lvRead').textContent = `${hit} added — show the next card`; continue; }
+    if (hit) { liveAsk(hit); continue; }
+    $('#lvRead').textContent = cand ? `Reading… ${cand}?` : 'Looking for a number…';
+    $('#lvBox').classList.remove('hit');
+  }
+}
+function liveAsk(num) {
+  LIVE.pending = num; LIVE.recent = []; navigator.vibrate?.(60); $('#lvBox').classList.add('hit'); $('#lvRead').textContent = `Found ${num}`;
+  const i = info(num), have = ownedByNum(num, true), already = LIVE.list.find(e => e.num === num);
+  const p = $('#lvPanel'); p.classList.add('on');
+  p.innerHTML = `<div class="row" style="gap:10px;align-items:center">
+      <div style="width:56px;flex:none"><div class="tile"><div class="img" data-official="${esc(num)}"><div class="ph">${esc(num)}</div></div></div></div>
+      <div class="grow" style="min-width:0"><b>${esc(i.name || num)}</b><div class="small muted">${esc(num)}${have ? ` · you have ${have}` : ''}${already ? ` · ${already.qty} in this scan` : ''}</div></div>
+      <button class="btn ghost sm" id="lvWrong">Wrong</button></div>
+    <div class="small muted" style="margin-top:8px">How many?</div>
+    <div class="qty">${[1, 2, 3, 4].map(n => `<button class="btn" data-lq="${n}">${n}</button>`).join('')}<button class="btn ghost" data-lq="more">5+</button></div>`;
+  hydrateImages(p);
+  p.querySelectorAll('[data-lq]').forEach(b => b.onclick = () => {
+    let q = b.dataset.lq === 'more' ? parseInt(prompt('How many?', '5'), 10) : +b.dataset.lq; if (!q || q < 1) return;
+    const e = LIVE.list.find(x => x.num === num); if (e) e.qty += q; else LIVE.list.push({ num, qty: q });
+    liveSave(); liveCount(); liveNext(num, `Added ${q} × ${i.name || num}`);
+  });
+  $('#lvWrong').onclick = () => liveNext(num, 'Skipped — try again or move to the next card');
+}
+function liveNext(num, msg) {
+  $('#lvPanel').classList.remove('on'); $('#lvBox').classList.remove('hit'); $('#lvRead').textContent = msg;
+  LIVE.ignore = num; LIVE.ignoreUntil = Date.now() + 2500; LIVE.pending = null;
+}
+$('#lvClose').onclick = () => { stopLive(); if (LIVE.list.length) toast('Scan kept — open Live scan again to carry on', 3000); };
+$('#lvDone').onclick = () => { stopLive(); liveReview(); };
+function liveReview() {
+  const L = LIVE.list, n = L.reduce((s, e) => s + e.qty, 0);
+  if (!L.length) return toast('Nothing scanned yet');
+  openSheet(`<h3>${n} card${n === 1 ? '' : 's'} scanned</h3><p class="small muted">Check the list, then add them all in one go.</p>
+    <div id="lvList">${L.map((e, k) => `<div class="row" style="gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #2a2d38">
+      <div style="width:46px;flex:none"><div class="tile"><div class="img" data-official="${esc(e.num)}"><div class="ph"></div></div></div></div>
+      <div class="grow" style="min-width:0"><b class="small">${esc(info(e.num).name || e.num)}</b><div class="small muted">${esc(e.num)}</div></div>
+      <div class="stepper"><button data-lr="${k}:-1" aria-label="One fewer">−</button><span>${e.qty}</span><button data-lr="${k}:1" aria-label="One more">+</button></div></div>`).join('')}</div>
+    <label class="f"><input type="checkbox" id="lvInc" style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> These are on the way (not arrived yet)</label>
+    <div class="row" style="gap:8px;margin-top:12px"><button class="btn grow" id="lvAdd">Add ${n} to collection</button><button class="btn ghost" id="lvMore">Scan more</button></div>
+    <button class="btn ghost sm" id="lvClear" style="margin-top:10px">Clear this scan</button>`, root => {
+    root.querySelectorAll('[data-lr]').forEach(b => b.onclick = () => { const [k, d] = b.dataset.lr.split(':').map(Number); L[k].qty += d; if (L[k].qty <= 0) L.splice(k, 1); liveSave(); L.length ? liveReview() : closeSheet(); });
+    $('#lvMore').onclick = () => { closeSheet(); startLive(); };
+    $('#lvClear').onclick = () => { if (!confirm('Throw away this scan list?')) return; LIVE.list = []; liveSave(); closeSheet(); };
+    $('#lvAdd').onclick = () => { const inc = $('#lvInc').checked;
+      for (const e of L) { const key = keyOf(e.num, false), c = S.cards[key] || (S.cards[key] = { num: e.num, collector: false, owned: 0, incoming: 0, rarity: info(e.num).rarity || '', sleeved: '', notes: '' });
+        if (inc) c.incoming = (c.incoming || 0) + e.qty; else c.owned = (c.owned || 0) + e.qty; }
+      LIVE.list = []; liveSave(); save(); closeSheet(); go('collection'); toast(`Added ${n} card${n === 1 ? '' : 's'}`); };
+  });
 }
 // ---------- Start ----------
 (async () => {
