@@ -1072,6 +1072,9 @@ function runBuilder(o) {
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
     r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateVs(m, o.opp) + 1.2 * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
   all.sort((a, b) => b.rank - a.rank);
+  if (o.free) for (const r of all) { // cards in these colours that your other cores are holding back
+    const held = {}; for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) { const i = info(e.num); if (r.colours.includes(i.colour) && !RESOURCE_TYPES.has(i.type)) held[e.num] = (held[e.num] || 0) + e.qty; }
+    r.held = Object.keys(held).sort((a, b) => (RAR_SCORE[info(b).rarity] || 2) + fx(info(b)).value + (info(b).type === 'Pilot' || info(b).type === 'Base' ? 1 : 0) - (RAR_SCORE[info(a).rarity] || 2) - fx(info(a)).value - (info(a).type === 'Pilot' || info(a).type === 'Base' ? 1 : 0)); }
   // three genuinely different options: best overall, then the best of other colours / styles where possible
   const pick = []; for (const r of all) { if (pick.length >= 3) break; if (pick.some(p => p.colours.join() === r.colours.join() && p.m.style === r.m.style) && all.length > 3) continue; pick.push(r); }
   for (const r of all) { if (pick.length >= 3) break; if (!pick.includes(r)) pick.push(r); }
@@ -1092,6 +1095,13 @@ function showOptions(list, size, o) {
       <h3>${esc(name)}</h3>
       ${profileLine(r.cards, r.m)}${shapeLine(r.cards, size)}
       ${chk ? `<p class="small ${chk.errors.length ? 'warn' : 'ok'}">${chk.errors.length ? chk.errors.map(esc).join('<br>') : 'Legal deck'}</p>` : ''}
+      ${(() => { const w = []; const m = r.m, U = m.units * r.n / 50;
+        if (m.dead > 0) w.push(`${Math.round(m.dead * U)} unit${Math.round(m.dead * U) === 1 ? '' : 's'} can't link — their pilot isn't in this ${size === 25 ? 'core' : 'deck'}: ${esc([...new Set(r.cards.filter(e => { const i = info(e.num); return i.link && !r.cards.some(p => info(p.num).type === 'Pilot' && linksTo(i, info(p.num))); }).map(e => info(e.num).name + ' (needs ' + info(e.num).link + ')'))].join(', '))}`);
+        if (m.plain && size === 25) w.push('Has a plain 2/2 (' + esc(r.cards.filter(e => info(e.num).vanilla).map(e => info(e.num).name).join(', ')) + ') — it can only pair with cores that have none');
+        if (!r.cards.some(e => info(e.num).type === 'Base')) w.push('No base');
+        if (r.n < size) w.push(`Only ${r.n} cards — not enough free cards in ${r.colours.join('/')}`);
+        if (r.held && r.held.length && (m.dead > 0 || r.n < size || r.notes.some(x => /^Only/.test(x)))) w.push(`Your other cores already use ${esc(r.held.slice(0, 5).map(n => info(n).name).join(', '))}. Untick "Don't use cards already in my other cores" to let it use them.`);
+        return w.length ? `<div class="card" style="margin:8px 0;border-color:#7A5326"><b class="small warn">Weak spots</b><ul class="small" style="padding-left:18px;margin:4px 0">${w.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''; })()}
       ${r.buys.length ? `<div class="card" style="margin:8px 0"><b class="small">To buy · about US$${r.cost.toFixed(2)}</b><div class="small muted">${r.buys.map(b => `${esc(info(b.num).name)} ×${b.need}${b.usd ? ` ($${b.usd.toFixed(2)})` : ''}`).join(' · ')}</div></div>` : '<p class="small ok">All from cards you own.</p>'}
       ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.slice(0, 4).map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
       <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty, need: Math.max(0, e.qty - playableByNum(e.num, o.incoming)) })).join('')}</div>
@@ -1180,6 +1190,7 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
     if (budget && c.own < 4 && !inc[c.num]) s -= c.own === 0 ? 0.9 : 0.3;     // cards you'd have to buy only win when they're clearly better
     if (opts.fav && opts.fav(c)) s += 0.6;                                     // your favourite series get the nod when it's close
     if (opts.tune) s += tuneScore(c, opts.tune);
+    if (size <= 25 && c.vanilla && !inc[c.num]) s -= 0.6;                      // a plain 2/2 blocks pairing with any other core that has one
     return s;
   };
   // Pick the pilots first: the ones that link with the most (and best) units you own in these colours
@@ -1305,26 +1316,29 @@ const META = [
   ['Aggro', 'PB Barbatos'], ['Midrange', 'BW Orb'], ['Midrange', 'RW Aegis'], ['Control', 'GW Wing'],
 ];
 function deckProfile(cards) {
-  let n = 0, uq = 0, lv = 0, early = 0, fin = 0, ap = 0, hp = 0, cmd = 0, base = 0, pil = 0, quad = 0, rar = 0, linked = 0, fxv = 0, rem = 0, blk = 0, drw = 0, eva = 0, buf = 0, self = 0, pay = 0; const tc = {};
+  let n = 0, uq = 0, lv = 0, early = 0, fin = 0, ap = 0, hp = 0, cmd = 0, base = 0, pil = 0, quad = 0, rar = 0, linked = 0, fxv = 0, rem = 0, blk = 0, drw = 0, eva = 0, buf = 0, self = 0, pay = 0, dead = 0, plain = 0; const tc = {};
   const pilots = cards.filter(e => info(e.num).type === 'Pilot').map(e => info(e.num));
   for (const e of cards) { const i = info(e.num), q = e.qty; n += q; if (q >= 3) quad += q; rar += (RAR_SCORE[(i.rarity || '').replace(/\+/g, '')] || 2) * q;
     for (const t of new Set((i.trait || '').match(/\([^)]+\)/g) || [])) tc[t] = (tc[t] || 0) + q;
     const f = fx(i); fxv += f.value * q; rem += Math.min(2, f.removal) * q; blk += f.blocker ? q : 0; drw += f.draw * q; eva += f.evasive * q; buf += f.buff ? q : 0; self += f.selfdmg ? q : 0; pay += f.payoff ? q : 0;
-    if (i.type === 'Unit') { uq += q; lv += (i.lv ?? 4) * q; if (i.lv != null && i.lv <= 3) early += q; if ((i.lv ?? 0) >= 6) fin += q;
+    if (i.type === 'Unit') { uq += q; lv += (i.lv ?? 4) * q; if (i.lv != null && i.lv <= 3) early += q; if ((i.lv ?? 0) >= 6) fin += q; if (i.link && !pilots.some(p => linksTo(i, p))) dead += q; if (i.vanilla) plain += q;
       ap += ((i.ap ?? 0) - expStat(i.lv)) * q; hp += ((i.hp ?? 0) - expStat(i.lv)) * q; if (pilots.some(p => linksTo(i, p))) linked += q; }
     else if (i.type === 'Command') cmd += q; else if (i.type === 'Base') base += q; else if (i.type === 'Pilot') pil += q; }
   const k = n ? 50 / n : 0, U = Math.max(1, uq), cl = v => Math.max(0, Math.min(1, v));
   const m = { n, units: uq * k, early: early * k, fin: fin * k, cmd: cmd * k, base: base * k, pil: pil * k, avgLv: uq ? lv / U : 0, ap: ap / U, hp: hp / U,
     link: linked / U, quad: n ? quad / n : 0, rar: n ? rar / n : 0, cohesion: n ? Math.max(0, ...Object.values(tc)) / n : 0,
     fx: n ? fxv / n : 0, removal: rem * k, blockers: blk * k, draw: drw * k, evasive: eva * k, buffs: buf * k,
+    dead: uq ? dead / U : 0, plain, // dead = units whose pilot isn't in the deck · plain = copies of plain 2/2s (only one such number per deck)
     engine: self * k >= 6 && pay * k >= 6 ? Math.min(1, Math.min(self, pay) * k / 12) : 0 };
   const aggro = (m.early - 16) / 4 + (4 - m.avgLv) * 1.2 + m.ap - m.hp * 0.2 - m.base / 6 + (m.evasive + m.buffs * 0.5 - 4) / 4 + m.engine;
   const control = (m.cmd + m.base - 12) / 4 + (m.avgLv - 4) * 1.2 + m.hp * 0.4 - m.ap * 0.5 + (m.fin - 4) / 4 + (m.removal + m.blockers * 0.5 + m.draw - 10) / 8;
   m.lean = aggro - control; m.style = m.lean > 2 ? 'Aggro' : m.lean < -2 ? 'Control' : 'Midrange';
   let pen = 0; for (const [key, v] of [['units', m.units], ['pilots', m.pil], ['commands', m.cmd], ['bases', m.base], ['early', m.early]]) { const [lo, hi] = SHAPE[key]; pen += Math.max(0, lo - v, v - hi) / Math.max(2, hi - lo); }
-  if (n < 40) pen *= 0.35; // a core is only half a deck: the other half evens out its shape
+  if (n < 40) pen *= 0.6; // a core is only half a deck: the other half evens out some of its shape
+  pen += 3 * m.dead + (n < 40 && plain ? 0.5 : 0); // units with no pilot to link · a plain 2/2 limits what a core can pair with
   m.power = n ? Math.round(Math.max(0, Math.min(10, 10 * (0.12 * cl((m.rar - 1.8) / 1.4) + 0.22 * m.link + 0.14 * cl(m.cohesion) + 0.14 * m.quad + 0.08 * cl(0.5 + (m.ap + m.hp) / 4) + 0.18 * cl(m.fx / 1.2) + 0.12 * cl(m.removal / 8 + m.engine)) - pen * 0.8)) * 10) / 10 : 0;
-  m.vs = Object.fromEntries(STYLES.map(s => [s, matchup(m, s)]));
+  const raw = STYLES.map(s => matchup(m, s)), mean = raw.reduce((a, b) => a + b, 0) / 3; // relative: every deck has a best and a worst match-up
+  m.vs = Object.fromEntries(STYLES.map((s, i) => [s, Math.round((raw[i] - 0.8 * mean) * 10) / 10]));
   return m;
 }
 function matchup(m, opp) { // −2 (bad) … +2 (good)
@@ -1640,7 +1654,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.24 (new builder) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.25 (weak-spot checks) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
