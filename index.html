@@ -1020,13 +1020,16 @@ function openBuilder() {
       <select id="bxOpp">${META.map(([st, n]) => `<option value="${esc(st)}" ${o.opp === st && (st === 'any' || n === o.oppName) ? 'selected' : ''} data-n="${esc(n)}">${esc(n)}${st !== 'any' && st !== n ? ' (' + st.toLowerCase() + ')' : ''}</option>`).join('')}</select>
       <label class="f" for="bxQ">Build around / leave out</label>
       <input type="search" id="bxQ" placeholder="Search a card, e.g. Barbatos" value="${esc(q)}">
-      <div class="list">${hits.map(c => `<div class="li" style="padding:6px 0"><span class="dot" style="background:${colourVar(c.colour)}"></span><div class="grow small"><b>${esc(c.name)}</b><div class="muted">${esc(c.num)} · own ${playableByNum(c.num, true)}</div></div>
-        <button class="btn sm" data-inc="${esc(c.num)}">Use</button><button class="btn ghost sm" data-exc="${esc(c.num)}">Leave out</button></div>`).join('')}</div>
+      <div class="list">${hits.map(c => { const play = playableByNum(c.num, true), all = ownedByNum(c.num, true), coll = all - play;
+        const twin = play ? null : Object.values(CATALOG).find(x => x.num !== c.num && x.name === c.name && ownedByNum(x.num, true));
+        return `<div class="li" style="padding:6px 0"><span class="dot" style="background:${colourVar(c.colour)}"></span><div class="grow small"><b>${esc(c.name)}</b><div class="muted">${esc(cap(c.colour || '?'))} · ${esc(c.type)} · ${esc(c.num)} · <span class="${play || (o.collector && coll) ? 'ok' : 'warn'}">own ${o.collector ? all : play}</span>${coll && !o.collector ? ` <span class="warn">(+${coll} collector, not counted)</span>` : ''}${twin ? ` <span class="warn">· you own the ${esc(twin.colour)} one, ${esc(twin.num)}</span>` : ''}</div></div>`
+        + `<button class="btn sm" data-inc="${esc(c.num)}">Use</button><button class="btn ghost sm" data-exc="${esc(c.num)}">Leave out</button></div>`; }).join('')}</div>
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">
-        ${Object.entries(o.include).map(([n, k]) => `<span class="pill ok" style="display:inline-flex;align-items:center;gap:4px">${esc(info(n).name)} ×${k}<button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-incq="${esc(n)}">${k < 4 ? '+' : '1'}</button><button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-unc="${esc(n)}">×</button></span>`).join('')}
+        ${Object.entries(o.include).map(([n, k]) => `<span class="pill ok" style="display:inline-flex;align-items:center;gap:4px">${esc(info(n).name)} <span class="muted">${esc(info(n).num)}</span> ×${k}<button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-incq="${esc(n)}">${k < 4 ? '+' : '1'}</button><button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-unc="${esc(n)}">×</button></span>`).join('')}
         ${o.exclude.map(n => `<span class="pill bad" style="display:inline-flex;align-items:center;gap:4px">No ${esc(info(n).name)}<button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-unx="${esc(n)}">×</button></span>`).join('')}</div>
       <label class="f" for="bxBud">Budget for cards you don't own (US$, TCGplayer prices) — 0 = only my cards</label>
       <input type="number" id="bxBud" inputmode="decimal" min="0" step="5" value="${o.budget || 0}">
+      <label class="f"><input type="checkbox" id="bxCol" ${o.collector ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Play my collector copies too (+, alt art)</label>
       <label class="f"><input type="checkbox" id="bxInc" ${o.incoming ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Count cards on the way</label>
       ${o.what !== 'every' ? `<label class="f"><input type="checkbox" id="bxFree" ${o.free ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Don't use cards already in my other cores</label>` : '<p class="small muted">Core per colour uses your whole collection and replaces your earlier smart cores. Hand-made cores are kept.</p>'}
       <button class="btn" id="bxGo" style="width:100%;margin-top:14px">Build</button>`;
@@ -1038,13 +1041,14 @@ function openBuilder() {
     $('#bxOpp').onchange = e => { o.opp = e.target.value; o.oppName = e.target.selectedOptions[0].dataset.n; save(); };
     const st = $('#bxStrict'); if (st) st.onchange = e => { o.strict = e.target.checked; save(); };
     $('#bxQ').oninput = e => { q = e.target.value.trim().toLowerCase(); draw(); const el = $('#bxQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); };
-    sh.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { const n = b.dataset.inc; o.include[n] = Math.max(1, Math.min(4, playableByNum(n, true) || 4)); o.exclude = o.exclude.filter(x => x !== n); q = ''; draw(); });
+    sh.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { const n = b.dataset.inc; o.include[n] = Math.max(1, Math.min(4, (o.collector ? ownedByNum(n, true) : playableByNum(n, true)) || 4)); o.exclude = o.exclude.filter(x => x !== n); q = ''; draw(); });
     sh.querySelectorAll('[data-exc]').forEach(b => b.onclick = () => { const n = b.dataset.exc; if (!o.exclude.includes(n)) o.exclude.push(n); delete o.include[n]; q = ''; draw(); });
     sh.querySelectorAll('[data-incq]').forEach(b => b.onclick = () => { const n = b.dataset.incq; o.include[n] = o.include[n] >= 4 ? 1 : o.include[n] + 1; draw(); });
     sh.querySelectorAll('[data-unc]').forEach(b => b.onclick = () => { delete o.include[b.dataset.unc]; draw(); });
     sh.querySelectorAll('[data-unx]').forEach(b => b.onclick = () => { o.exclude = o.exclude.filter(x => x !== b.dataset.unx); draw(); });
     $('#bxBud').onchange = e => { o.budget = Math.max(0, +e.target.value || 0); save(); };
     $('#bxInc').onchange = e => { o.incoming = e.target.checked; S.settings.includeIncoming = o.incoming; save(); };
+    $('#bxCol').onchange = e => { o.collector = e.target.checked; draw(); };
     const fr = $('#bxFree'); if (fr) fr.onchange = e => { o.free = e.target.checked; save(); };
     $('#bxReset').onclick = () => { Object.assign(o, BUILD_DEFAULT()); q = ''; draw(); };
     $('#bxGo').onclick = () => { $('#bxGo').disabled = true; $('#bxGo').textContent = 'Building…'; setTimeout(() => runBuilder(o), 30); };
@@ -1058,7 +1062,9 @@ function runBuilder(o) {
   const themes = seriesFn ? (o.strict ? [seriesFn] : [seriesFn, null]) : [null];
   const tunes = o.style === 'Aggro' ? ['fast'] : o.style === 'Control' ? ['tough'] : o.style === 'Midrange' ? ['power', null] : [null, 'fast', 'tough', 'power'];
   if (o.opp !== 'any' && COUNTER_TUNE[o.opp] && !tunes.includes(COUNTER_TUNE[o.opp]) && o.style === 'auto') tunes.push(COUNTER_TUNE[o.opp]);
-  const extra = { include: o.include, exclude: new Set(o.exclude), budget: o.budget };
+  const extra = { include: o.include, exclude: new Set(o.exclude), budget: o.budget, collector: !!o.collector };
+  const incCols = [...new Set(Object.keys(o.include).map(n => info(n).colour).filter(Boolean))]; // cards you asked for set the colours
+  if (incCols.length) { if (o.what === 'core') o = { ...o, cols: incCols.slice(0, 1) }; else o = { ...o, cols: [...new Set([...incCols, ...o.cols])].slice(0, 2) }; }
   if (o.what === 'every') return showSmartCores(smartCores(o.incoming, false, { themes, tunes, extra, opp: o.opp !== 'any' ? o.opp : null }));
   const size = o.what === 'deck' ? 50 : 25, colSets = [];
   if (size === 25) (o.cols.length ? o.cols : COLOURS).forEach(c => colSets.push([c]));
@@ -1099,6 +1105,8 @@ function showOptions(list, size, o) {
       ${profileLine(r.cards, r.m)}${shapeLine(r.cards, size)}
       ${chk ? `<p class="small ${chk.errors.length ? 'warn' : 'ok'}">${chk.errors.length ? chk.errors.map(esc).join('<br>') : 'Legal deck'}</p>` : ''}
       ${(() => { const w = []; const m = r.m, U = m.units * r.n / 50;
+        const missed = Object.keys(o.include).filter(n => !r.cards.some(e => e.num === n));
+        if (missed.length) w.push(`Couldn't fit ${esc(missed.map(n => info(n).name + ' (' + info(n).colour + ', ' + n + ')').join(', '))} — ${size === 25 ? 'a core is one colour, so it can only hold cards you asked for in one colour' : 'a deck is at most two colours'}`);
         if (m.dead > 0) w.push(`${Math.round(m.dead * U)} unit${Math.round(m.dead * U) === 1 ? '' : 's'} can't link — their pilot isn't in this ${size === 25 ? 'core' : 'deck'}: ${esc([...new Set(r.cards.filter(e => { const i = info(e.num); return i.link && !r.cards.some(p => info(p.num).type === 'Pilot' && linksTo(i, info(p.num))); }).map(e => info(e.num).name + ' (needs ' + info(e.num).link + ')'))].join(', '))}`);
         if (m.plain && size === 25) w.push('Has a plain 2/2 (' + esc(r.cards.filter(e => info(e.num).vanilla).map(e => info(e.num).name).join(', ')) + ') — it can only pair with cores that have none');
         if (!r.cards.some(e => info(e.num).type === 'Base')) w.push('No base');
@@ -1182,7 +1190,7 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
   const otherNums = new Set(other.map(e => e.num)), otherQty = {}; for (const e of other) otherQty[e.num] = (otherQty[e.num] || 0) + e.qty; // max 4 copies across the whole deck
   const inc = opts.include || {}, budget = +opts.budget || 0; // include = { number: copies } to build around · budget = US$ you're happy to spend on missing cards
   const pool = Object.values(CATALOG).filter(c => cols.includes(c.colour) && (!theme || theme(c) || inc[c.num]) && !RESOURCE_TYPES.has(c.type) && !RULES.banned[c.num] && !(opts.lock && opts.lock.has(c.num)) && !(opts.noVanilla && c.vanilla) && !(opts.exclude && opts.exclude.has(c.num)))
-    .map(c => { const own = Math.max(0, playableByNum(c.num, incoming) - (usedElsewhere[c.num] || 0)); return { ...c, own, avail: Math.max(own, inc[c.num] || 0, budget > 0 && c.usd != null ? 4 : 0) }; }).filter(c => c.avail > 0);
+    .map(c => { const own = Math.max(0, (opts.collector ? ownedByNum(c.num, incoming) : playableByNum(c.num, incoming)) - (usedElsewhere[c.num] || 0)); return { ...c, own, avail: Math.max(own, inc[c.num] || 0, budget > 0 && c.usd != null ? 4 : 0) }; }).filter(c => c.avail > 0);
   const ownM = {}; pool.forEach(c => ownM[c.num] = c.own); let spent = 0;
   const base = c => {
     let s = RAR_SCORE[(c.rarity || '').replace(/\+/g, '')] || 2;
@@ -1666,7 +1674,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.26 (one side per core) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.27 (build-around fixes) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
