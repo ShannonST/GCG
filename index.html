@@ -1006,7 +1006,7 @@ const SERIES_CHIPS = ['IBO', 'Seed', 'Destiny', 'Wing', '00', 'Witch', 'Unicorn'
 const BUILD_DEFAULT = () => ({ meta: true, split: 25, anySplit: false, what: 'core', cols: [], series: [], strict: false, style: 'auto', opp: 'any', include: {}, exclude: [], budget: 0, incoming: !!S.settings.includeIncoming, free: true });
 function openBuilder() {
   const o = Object.assign(BUILD_DEFAULT(), S.settings.build || {}); let q = '';
-  if (o.opp && o.opp !== 'any') { o.vs = { ...(o.vs || {}), [o.oppName || o.opp]: 'strong' }; } o.opp = 'any'; for (const k in (o.vs || {})) if (o.vs[k] !== 'strong') delete o.vs[k]; // older single "Playing against" choice
+  if (o.opp && o.opp !== 'any') { o.vs = { ...(o.vs || {}), [o.oppName || o.opp]: 'strong' }; } o.opp = 'any'; { const ren = { 'Fast aggro': 'Fast', Midrange: 'Mid', 'Control / ramp': 'Control' }, nv = {}; for (const k in (o.vs || {})) { const n = ren[k] || k; if (o.vs[k] === 'strong' && ['Fast', 'Mid', 'Control'].includes(n)) nv[n] = 'strong'; } o.vs = nv; } // older single "Playing against" choice
   const chip = (attr, val, on, label) => `<button class="chip ${on ? 'on' : ''}" data-${attr}="${esc(val)}">${esc(label)}</button>`;
   const cap = t => t[0].toUpperCase() + t.slice(1);
   const draw = () => {
@@ -1030,8 +1030,8 @@ function openBuilder() {
       <label class="f" style="margin-top:12px"><input type="checkbox" id="bxMeta" ${o.meta !== false ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Use tournament-winning decks as a guide</label>
       <div class="small muted">${metaStats().n ? `${metaStats().n} top-finishing decks from Limitless TCG, updated ${esc(fmtDate(METALIST.updated))}` : 'No tournament decks loaded'} <button class="btn ghost sm" id="bxMetaUp" style="min-height:28px;padding:0 8px">Update</button></div>
       <label class="f">Build it strong against — tick as many as you like (more ticks = more all-round)</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${metaList().filter(([st]) => st !== 'any').map(([st, n]) => `<label class="card small" style="display:flex;align-items:center;gap:8px;padding:8px;margin:0;${(o.vs || {})[n] === 'strong' ? 'border-color:var(--ok)' : ''}"><input type="checkbox" data-vs="${esc(n)}" ${(o.vs || {})[n] === 'strong' ? 'checked' : ''} style="width:22px;height:22px;flex:none;accent-color:var(--ok)"><span><b>${esc(n)}</b>${st !== n ? `<br><span class="muted">${st.toLowerCase()}</span>` : ''}</span></label>`).join('')}</div>
-      <div class="row" style="gap:8px;margin-top:6px"><button class="btn ghost sm" id="bxAllRound">All-rounder (aggro + midrange + control)</button><button class="btn ghost sm" id="bxVsClr">Clear</button></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">${metaList().filter(([st]) => st !== 'any').map(([st, n]) => `<label class="card small" style="display:flex;align-items:center;gap:8px;padding:8px;margin:0;${(o.vs || {})[n] === 'strong' ? 'border-color:var(--ok)' : ''}"><input type="checkbox" data-vs="${esc(n)}" ${(o.vs || {})[n] === 'strong' ? 'checked' : ''} style="width:22px;height:22px;flex:none;accent-color:var(--ok)"><span><b>${esc(n)}</b></span></label>`).join('')}</div>
+      <div class="row" style="gap:8px;margin-top:6px"><button class="btn ghost sm" id="bxAllRound">All three</button><button class="btn ghost sm" id="bxVsClr">Clear</button></div>
       <label class="f" for="bxQ">Build around / leave out</label>
       <input type="search" id="bxQ" placeholder="Search a card, e.g. Barbatos" value="${esc(q)}">
       <div class="list">${hits.map(c => { const play = playableByNum(c.num, true), all = ownedByNum(c.num, true), coll = all - play;
@@ -1054,7 +1054,7 @@ function openBuilder() {
     sh.querySelectorAll('[data-ser]').forEach(b => b.onclick = () => { const t = b.dataset.ser; o.series = o.series.includes(t) ? o.series.filter(x => x !== t) : [...o.series, t]; draw(); });
     sh.querySelectorAll('[data-sty]').forEach(b => b.onclick = () => { o.style = b.dataset.sty; draw(); });
     sh.querySelectorAll('[data-vs]').forEach(c => c.onchange = () => { o.vs = o.vs || {}; const n = c.dataset.vs; if (c.checked) o.vs[n] = 'strong'; else delete o.vs[n]; draw(); });
-    $('#bxAllRound').onclick = () => { o.vs = { 'Fast aggro': 'strong', 'Midrange': 'strong', 'Control / ramp': 'strong' }; draw(); };
+    $('#bxAllRound').onclick = () => { o.vs = { Fast: 'strong', Mid: 'strong', Control: 'strong' }; draw(); };
     $('#bxVsClr').onclick = () => { o.vs = {}; draw(); };
     const st = $('#bxStrict'); if (st) st.onchange = e => { o.strict = e.target.checked; save(); };
     $('#bxQ').oninput = e => { q = e.target.value.trim().toLowerCase(); draw(); const el = $('#bxQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); };
@@ -1097,17 +1097,19 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
     else for (const a of (o.cols.length ? o.cols : COLOURS)) for (const b of COLOURS) if (a !== b && (o.cols.length || X !== 25 || COLOURS.indexOf(b) > COLOURS.indexOf(a))) colSets.push([a, b]); }
   else if (o.cols.length === 2) colSets.push(o.cols);
   else { const firsts = o.cols.length ? o.cols : COLOURS; for (const a of firsts) for (const b of COLOURS) if (o.cols.length || COLOURS.indexOf(b) >= COLOURS.indexOf(a)) colSets.push(a === b ? [a] : [a, b]); }
-  const halves = (cols, th, tune, lead) => { const X = o.split || 25, cp = t => t[0].toUpperCase() + t.slice(1);
+  const halves = (cols, th, tune, lead, tuneB = tune) => { const X = o.split || 25, cp = t => t[0].toUpperCase() + t.slice(1);
     const A = autoBuild([cols[0]], o.incoming, o.free, [], X, th, { ...extra, fav, tune, lead, seed: v.seed }); if (!A.n) return A;
-    const B = autoBuild([cols[1]], o.incoming, o.free, A.cards, 50 - X, th, { ...extra, fav, tune, seed: v.seed });
+    const B = autoBuild([cols[1]], o.incoming, o.free, A.cards, 50 - X, th, { ...extra, budget: extra.budget ? Math.max(0.01, extra.budget - A.cost) : 0, fav, tune: tuneB, seed: v.seed }); // one budget shared by both halves
     return { colour: cols, cards: [...A.cards, ...B.cards].sort(sortByCurve), n: A.n + B.n, halves: [A.cards, B.cards], sizes: [X, 50 - X], leads: A.leads,
       notes: [...A.notes.map(x => cp(cols[0]) + ': ' + x), ...B.notes.map(x => cp(cols[1]) + ': ' + x)], buys: [...A.buys, ...B.buys], cost: A.cost + B.cost, upgrades: [] }; };
   const styleOk = m => o.style === 'auto' || m.style === o.style;
   const seen = new Set(), all = [];
   const jobs = []; for (const cols of colSets) for (const th of themes) for (const tune of tunes) jobs.push([cols, th, tune, null]);
-  for (let j = 0; j < jobs.length; j++) { const [cols, th, tune, lead] = jobs[j];
-    const r = size === 50 && !o.anySplit && cols.length === 2 ? halves(cols, th, tune, lead) : autoBuild(cols, o.incoming, o.free, [], size, th, { ...extra, fav, tune, lead, seed: v.seed }); if (!r.n) continue;
-    if (!lead && tune === tunes[0]) for (const l of r.leads.slice(1)) for (const t2 of tunes) jobs.push([cols, th, t2, l]); // also try each other main pilot
+  const mix = size === 50 && !o.anySplit && vsPicks(o.vs).strong.length > 1; // all-round decks: each half may lean a different way (e.g. one fast, one tough)
+  if (mix) for (const job of jobs.slice()) for (const tb of tunes) if (tb !== job[2]) jobs.push([...job, tb]);
+  for (let j = 0; j < jobs.length; j++) { const [cols, th, tune, lead, tuneB] = jobs[j];
+    const r = size === 50 && !o.anySplit && cols.length === 2 ? halves(cols, th, tune, lead, tuneB === undefined ? tune : tuneB) : autoBuild(cols, o.incoming, o.free, [], size, th, { ...extra, fav, tune, lead, seed: v.seed }); if (!r.n) continue;
+    if (!lead && tune === tunes[0] && tuneB === undefined) for (const l of r.leads.slice(1)) for (const t2 of tunes) { jobs.push([cols, th, t2, l]); if (mix) for (const tb of tunes) if (tb !== t2) jobs.push([cols, th, t2, l, tb]); } // also try each other main pilot
     const sig = sigOf(r.cards); if (seen.has(sig) || (v.avoid && v.avoid.has(sig))) continue; seen.add(sig); r.sig = sig;
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
     r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + 1.2 * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
@@ -1148,7 +1150,13 @@ function showOptions(list, size, o, v = {}) {
         if (r.held && r.held.length && (m.dead > 0 || r.n < size || r.notes.some(x => /^Only/.test(x)))) w.push(`Your other cores already use ${esc(r.held.slice(0, 5).map(n => info(n).name).join(', '))}. Untick "Don't use cards already in my other cores" to let it use them.`);
         return w.length ? `<div class="card" style="margin:8px 0;border-color:#7A5326"><b class="small warn">Weak spots</b><ul class="small" style="padding-left:18px;margin:4px 0">${w.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''; })()}
       ${(() => { const P = vsPicks(o.vs), weakN = metaList().filter(([st, n]) => st !== 'any' && (o.vs || {})[n] === 'weak').map(x => x[1]);
-        return P.names.length || weakN.length ? `<div class="small" style="margin:4px 0">Your match-ups: ${P.names.map(([n, st]) => `${esc(n)} ${edgeWord(r.m.vs[st])}`).join(' · ')}${weakN.length ? `<span class="muted">${P.names.length ? ' · ' : ''}weak OK vs ${esc(weakN.join(', '))}</span>` : ''}</div>` : ''; })()}
+        const bad = P.names.filter(([n, st]) => r.m.vs[st] <= -0.5), cols = r.colours || [];
+        const fix = bad.map(([n, st]) => { const t = COUNTER_TUNE[st], M = metaStats(), inDeck = new Set(r.cards.map(e => e.num));
+          const c = Object.values(CATALOG).filter(c => cols.includes(c.colour) && !inDeck.has(c.num) && !RESOURCE_TYPES.has(c.type) && c.type !== 'Pilot' && !c.vanilla && !RULES.banned[c.num] && c.usd != null)
+            .map(c => [c, tuneScore(c, t) + fx(c).value + 2 * Math.sqrt(M.rate(c.num)) + (r.cards.some(e => info(e.num).type === 'Pilot' && linksTo(c, info(e.num))) ? 1 : 0)]).sort((x, y) => y[1] - x[1]).slice(0, 3);
+          return `<div class="small">To be stronger vs <b>${esc(n)}</b>: ${c.map(([c]) => `${esc(c.name)} <span class="muted">${esc(c.num)} · own ${playableByNum(c.num, true)} · ~US$${c.usd.toFixed(2)}</span>`).join('; ')}</div>`; });
+        return P.names.length || weakN.length ? `<div class="small" style="margin:4px 0">Your match-ups: ${P.names.map(([n, st]) => `${esc(n)} ${edgeWord(r.m.vs[st])}`).join(' · ')}${weakN.length ? `<span class="muted">${P.names.length ? ' · ' : ''}weak OK vs ${esc(weakN.join(', '))}</span>` : ''}</div>
+          ${fix.length ? `<div class="card" style="margin:6px 0;border-color:#7A5326"><div class="small muted">Best your cards can do — ${bad.length === 1 ? 'this match-up stays' : 'these stay'} weak. ${o.budget ? '' : 'Set a budget to let the builder buy fixes, or pick up:'}</div>${fix.join('')}</div>` : ''}` : ''; })()}
       ${o.meta !== false ? metaGuide(r) : ''}
       ${r.buys.length ? `<div class="card" style="margin:8px 0"><b class="small">To buy · about US$${r.cost.toFixed(2)}</b><div class="small muted">${r.buys.map(b => `${esc(info(b.num).name)} ×${b.need}${b.usd ? ` ($${b.usd.toFixed(2)})` : ''}`).join(' · ')}</div></div>` : '<p class="small ok">All from cards you own.</p>'}
       ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.slice(0, 4).map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
@@ -1368,7 +1376,7 @@ function autoDeck(c1, c2, incoming, avoidUsed, theme = null, opts = {}) {
 let METALIST = { decks: [] }, MSTAT = null;
 async function loadMetaDecks() {
   try { const r = await fetch('decks.json'); METALIST = await r.json(); } catch { }
-  if (S.meta && (S.meta.updated || '') >= (METALIST.updated || '')) METALIST = S.meta; MSTAT = null; CUTS = null;
+  if (S.meta && (S.meta.updated || '') >= (METALIST.updated || '')) METALIST = S.meta; MSTAT = null; CUTS = null; BASE = null;
 }
 function metaStats() {
   if (MSTAT) return MSTAT;
@@ -1389,14 +1397,20 @@ function metaStats() {
   return MSTAT;
 }
 let CUTS = null, cutting = false;
+let BASE = null, basing = false;
+function matchBase() { // average and spread of the winning decks' raw match-ups, per style
+  if (BASE) return BASE; if (basing || !(METALIST.decks || []).length) return null;
+  basing = true; const P = METALIST.decks.map(d => deckProfile(d.cards.map(([num, qty]) => ({ num, qty })))); basing = false;
+  BASE = {}; for (const st of STYLES) { const v = P.map(m => m.vsRaw[st]), mu = v.reduce((a, b) => a + b, 0) / v.length, sd = Math.sqrt(v.reduce((a, b) => a + (b - mu) ** 2, 0) / v.length) || 1; BASE[st] = [mu, sd]; }
+  return BASE;
+}
 function styleCuts() { // the fastest third of winning decks count as aggro, the slowest third as control
   if (CUTS) return CUTS; if (cutting || !(METALIST.decks || []).length) return [-2, 2];
   cutting = true; const L = METALIST.decks.map(d => deckProfile(d.cards.map(([num, qty]) => ({ num, qty }))).lean).sort((a, b) => a - b); cutting = false;
   return CUTS = [L[Math.floor(L.length / 3)], L[Math.floor(L.length * 2 / 3)]];
 }
 function metaList() { // "Playing against": the usual styles plus the decks winning right now
-  const out = [['any', 'Anyone / not sure'], ['Aggro', 'Fast aggro'], ['Midrange', 'Midrange'], ['Control', 'Control / ramp']];
-  for (const [name, a] of metaStats().archetypes.slice(0, 8)) { const d = a.decks[0], m = deckProfile(d.cards.map(([num, qty]) => ({ num, qty }))); out.push([m.style, name]); }
+  const out = [['any', 'Anyone / not sure'], ['Aggro', 'Fast'], ['Midrange', 'Mid'], ['Control', 'Control']];
   return out;
 }
 async function updateMetaDecks(progress) {
@@ -1410,7 +1424,7 @@ async function updateMetaDecks(progress) {
         if (cards.reduce((t, x) => t + x[1], 0) >= 45) decks.push({ event: ts[i].name, date: ts[i].date.slice(0, 10), players: ts[i].players, place: s.placing, deck: s.deck?.name || '', cards }); }
     } catch { } }
   if (!decks.length) throw new Error('no decks');
-  S.meta = { updated: today(), source: 'Limitless TCG', decks }; METALIST = S.meta; MSTAT = null; CUTS = null; save(); return decks.length;
+  S.meta = { updated: today(), source: 'Limitless TCG', decks }; METALIST = S.meta; MSTAT = null; CUTS = null; BASE = null; save(); return decks.length;
 }
 function metaGuide(r) { // what the winning decks say about this build
   const M = metaStats(); if (!M.n) return '';
@@ -1465,12 +1479,13 @@ function deckProfile(cards) {
   if (n < 40) pen *= 0.6; // a core is only half a deck: the other half evens out some of its shape
   pen += 3 * m.dead + (n < 40 && plain ? 0.5 : 0); // units with no pilot to link · a plain 2/2 limits what a core can pair with
   m.power = n ? Math.round(Math.max(0, Math.min(10, 10 * (0.12 * cl((m.rar - 1.8) / 1.4) + 0.22 * m.link + 0.14 * cl(m.cohesion) + 0.14 * m.quad + 0.08 * cl(0.5 + (m.ap + m.hp) / 4) + 0.18 * cl(m.fx / 1.2) + 0.12 * cl(m.removal / 8 + m.engine)) - pen * 0.8)) * 10) / 10 : 0;
-  const raw = STYLES.map(s => matchup(m, s)), mean = raw.reduce((a, b) => a + b, 0) / 3; // relative: every deck has a best and a worst match-up
-  m.vs = Object.fromEntries(STYLES.map((s, i) => [s, Math.round((raw[i] - 0.8 * mean) * 10) / 10]));
+  // each match-up compared with how the winning tournament decks do against that style: 0 = as good as a typical winner
+  const mb = matchBase(); m.vsRaw = Object.fromEntries(STYLES.map(s => [s, matchup(m, s)]));
+  m.vs = Object.fromEntries(STYLES.map(s => [s, mb ? Math.round(Math.max(-2, Math.min(2, (m.vsRaw[s] - mb[s][0]) / mb[s][1])) * 10) / 10 : m.vsRaw[s]]));
   return m;
 }
 function matchup(m, opp) { // −2 (bad) … +2 (good)
-  let e = BEATS[m.style] === opp ? 0.8 : BEATS[opp] === m.style ? -0.8 : 0;
+  let e = BEATS[m.style] === opp ? 0.4 : BEATS[opp] === m.style ? -0.4 : 0; // style edge is a nudge; the cards decide the rest
   if (opp === 'Aggro') e += 0.08 * (m.early - 16) + 0.5 * m.hp + 0.05 * (m.cmd + m.base - 12) - 0.4 * Math.max(0, m.avgLv - 4) + 0.06 * (m.removal + m.blockers - 8);
   if (opp === 'Control') e += 0.1 * (m.early - 16) + 0.5 * m.ap - 0.5 * Math.max(0, m.avgLv - 4) + 0.1 * (m.fin - 3) + 0.1 * (m.evasive - 2) + 0.4 * m.engine;
   if (opp === 'Midrange') e += 0.15 * (m.fin - 3) + 2 * (m.link - 0.5) + 0.05 * (m.cmd - 8) + 0.25 * (m.ap + m.hp);
@@ -1483,7 +1498,7 @@ function vsPicks(vs = {}) { // the ticked deck types: strong-against styles, wea
 }
 function rateMulti(m, vs) { // power, plus how it does against what you ticked; styles it may be weak against don't drag it down
   const { strong, weak } = vsPicks(vs), av = a => a.reduce((t, x) => t + x, 0) / a.length;
-  if (strong.length) { const e = strong.map(s => m.vs[s]); return m.power + 1.5 * (av(e) + 0.5 * Math.min(...e)); }
+  if (strong.length) { const e = strong.map(s => m.vs[s]), lo = Math.min(...e); return m.power + 1.5 * (av(e) + (e.length > 1 ? 2 : 0.5) * lo) - (e.length > 1 && lo <= -0.5 ? 2 : 0); } // several ticks: the worst match-up matters most
   const ss = STYLES.filter(s => !weak.has(s)); if (!ss.length) return m.power; const e = ss.map(s => m.vs[s]); return m.power + 1.2 * (av(e) + 0.5 * Math.min(...e));
 }
 function rateVs(m, opp) { // one number to rank decks by: power, plus how it does against what they're playing
@@ -1887,7 +1902,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.32 (strong-against ticks) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.33 (fairer match-ups) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
