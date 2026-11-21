@@ -1,10 +1,10 @@
 // GTCG My Card Collection — service worker
 // Keeps the app working offline and receives screenshots shared from other apps.
-const SHELL = 'gtcg-shell-v34';
+const SHELL = 'gtcg-shell-v36';
 const IMAGES = 'gtcg-card-pictures';
 const LIBS = 'gtcg-libs-v1';
 const SHARED = 'gtcg-shared';
-const SHELL_FILES = ['./', './index.html', './catalog.json', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
+const SHELL_FILES = ['./', './index.html', './catalog.json', './decks.json', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 const LIB_HOSTS = ['cdn.jsdelivr.net', 'docs.opencv.org', 'tessdata.projectnaptha.com'];
 
 self.addEventListener('install', e => {
