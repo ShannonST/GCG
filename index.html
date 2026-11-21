@@ -170,7 +170,7 @@ const RAR_SCORE = { LR: 3.2, R: 2.6, U: 2.2, C: 1.8 }; // rarity is only a rough
 // link pilot, TCGplayer market price in US$). Built from tcgcsv.com. Card effect text is not included.
 let SEED = [];
 async function loadSeed() {
-  try { const r = await fetch('catalog.json'); SEED = (await r.json()).map(c => ({ link: '', vanilla: false, ...c })); }
+  try { const r = await fetch('catalog.json'); SEED = (await r.json()).map(c => ({ link: '', ...c, vanilla: !!c.vanilla || (c.type === 'Unit' && c.lv === 2 && c.cost === 1 && c.ap === 2 && c.hp === 2 && 'text' in c && !/[a-z]/i.test(c.text)) })); /* plain 2/2s, incl. ones the list does not flag (Daughseat) */ }
   catch { SEED = []; toast('Card list not loaded — check your connection', 3500); }
 }
 
@@ -853,11 +853,11 @@ function renderBuilding() {
 function coreCardHTML(core) {
   const n = coreCount(core), col = coreColours(core);
   let have = 0; for (const e of core.cards) have += Math.min(e.qty, playableByNum(e.num, true));
-  const missing = n - have;
+  const missing = n - have, fx1 = core.flex && n < 25 && Object.values(core.flex)[0][1] === 25 - n;
   return `<button class="card" data-act="core:${core.id}" style="display:block;width:100%;text-align:left;margin-top:12px;cursor:pointer">
     <div class="row"><div class="grow"><div style="font-weight:700;font-size:17px">${esc(core.name)}</div>
       <div class="small muted">${col.map(c => `<span class="dot" style="display:inline-block;background:${colourVar(c)}"></span> ${c}`).join(' ') || 'no cards yet'} · ${n}/25${n >= 15 ? (m => ` · ${m.style} · power ${m.power.toFixed(1)}`)(deckProfile(core.cards)) : ''}</div></div>
-      <div class="small ${missing || n < 25 ? 'warn' : 'ok'}" style="font-weight:700">${n === 0 ? '' : missing ? missing + ' to buy' : n < 25 ? (25 - n) + ' short' : 'Ready ✓'}</div></div>
+      <div class="small ${missing || (n < 25 && !fx1) ? 'warn' : 'ok'}" style="font-weight:700">${n === 0 ? '' : missing ? missing + ' to buy' : n < 25 ? (fx1 ? `Ready ✓ +${25 - n} flex` : (25 - n) + ' short') : 'Ready ✓'}</div></div>
     <div class="prog" style="margin-top:10px"><div style="width:${Math.min(100, have / 25 * 100)}%;background:${colourVar(col[0])}"></div></div>
   </button>`;
 }
@@ -900,14 +900,19 @@ function renderCore() {
 }
 function sortByCurve(a, b) { const A = info(a.num), B = info(b.num); const t = x => TYPES.indexOf(x.type) < 0 ? 9 : TYPES.indexOf(x.type); return (t(A) - t(B)) || ((A.lv ?? 99) - (B.lv ?? 99)) || a.num.localeCompare(b.num); }
 function coreIssues(core) {
-  const out = [], n = coreCount(core), col = coreColours(core);
-  if (n !== 25) out.push(['warn', n < 25 ? `${25 - n} more to reach 25` : `${n - 25} over 25`]);
+  const out = [], n = coreCount(core), col = coreColours(core), fl = core.flex && Object.values(core.flex)[0];
+  if (n !== 25 && !(fl && n + fl[1] === 25)) out.push(['warn', n < 25 ? `${25 - n} more to reach 25` : `${n - 25} over 25`]);
+  if (fl && n + fl[1] === 25) out.push(['ok', `${n} + ${fl[1]} flex: ${Object.entries(core.flex).map(([c, [num]]) => `${c} → ${info(num).name}`).join(', ')}`]);
   if (col.length > 2) out.push(['bad', 'More than 2 colours']);
-  core.cards.forEach(e => { if (e.qty > 4) out.push(['bad', `${info(e.num).name}: more than 4`]); if (RULES.banned[e.num]) out.push(['bad', `${info(e.num).name} is banned`]); });
+  core.cards.forEach(e => { if (e.qty > 4) out.push(['bad', `${info(e.num).name}: more than 4`]); if (RULES.banned[e.num]) out.push(['bad', `${info(e.num).name} is banned`]); if (info(e.num).vanilla) out.push(['warn', `${info(e.num).name} is a plain 2/2 — pairs only with cores that have none`]); });
   const miss = core.cards.reduce((s, e) => s + Math.max(0, e.qty - playableByNum(e.num, true)), 0);
   if (miss) out.push(['warn', `${miss} cards to buy`]); else if (n) out.push(['ok', 'All cards owned']);
+  // physical copies: the same card in several of your built cores at once
+  if (core.status === 'built') for (const e of core.cards) { let tot = 0; for (const c of Object.values(S.cores)) if (c.status === 'built') { for (const x of c.cards) if (x.num === e.num) tot += x.qty; const f = c.flex && Object.values(c.flex).find(([num]) => num === e.num); if (f) tot += f[1]; }
+    const own = playableByNum(e.num, true); if (tot > own) out.push(['warn', `${info(e.num).name}: ${tot} across your cores, you own ${own}`]); }
   return out;
 }
+
 function openCatalogCard(num) {
   const keys = Object.keys(S.cards).filter(k => S.cards[k].num === num);
   if (keys.length) return openCard(keys.find(k => !S.cards[k].collector) || keys[0]);
@@ -985,11 +990,13 @@ function renderBuild() {
     <h2>Cores <span class="muted small">${cores.length}</span></h2>
     ${cores.length ? cores.map(coreCardHTML).join('') : '<p class="small muted">No cores yet. Tap <b>New build</b>.</p>'}
     <div class="row" style="gap:8px;margin-top:16px"><button class="btn ghost sm grow" id="bHand">Make a core by hand</button><button class="btn ghost sm grow" id="bPair" ${Object.keys(S.cores).length < 2 ? 'disabled' : ''}>Pair two cores by hand</button></div>
+    ${cores.length ? '<button class="btn ghost sm" id="bPdf" style="width:100%;margin-top:8px">Cores report (PDF)</button>' : ''}
   </div>`;
   $('#bOpen').onclick = openBuilder;
   $('#bFind').onclick = openDeckFinder;
   $('#bHand').onclick = () => newCore('built');
   $('#bPair').onclick = pairCores;
+  const pdf = $('#bPdf'); if (pdf) pdf.onclick = async () => { pdf.disabled = true; pdf.textContent = 'Making PDF…'; try { await exportCoresPDF(); } catch (e) { console.warn(e); if (e.message !== 'none') toast('Couldn’t make the PDF — check your internet', 3500); } pdf.disabled = false; pdf.textContent = 'Cores report (PDF)'; };
   document.querySelectorAll('[data-deck]').forEach(b => b.onclick = () => go('deck', { id: b.dataset.deck }));
   bindActs($('#app')); hydrateImages($('#app'));
 }
@@ -1008,7 +1015,7 @@ function openBuilder() {
       .sort((a, b) => playableByNum(b.num, true) - playableByNum(a.num, true)).slice(0, 8);
     $('#sheet').innerHTML = `<div class="row"><h3 class="grow">New build</h3><button class="btn ghost sm" id="bxReset">Reset</button></div>
       <label class="f">What</label>
-      <div class="seg">${[['core', '25-card core'], ['deck', '50-card deck'], ['every', 'Core per colour']].map(([v, l]) => `<button data-what="${v}" class="${o.what === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg">${[['core', '25-card core'], ['deck', '50-card deck'], ['every', 'Core set']].map(([v, l]) => `<button data-what="${v}" class="${o.what === v ? 'on' : ''}">${l}</button>`).join('')}</div>
       ${maxCols ? `<label class="f">Colour${maxCols > 1 ? 's (up to 2)' : ''} — none picked = try them all</label>
       <div class="chips" style="flex-wrap:wrap">${COLOURS.map(c => chip('col', c, o.cols.includes(c), cap(c))).join('')}</div>` : ''}
       <label class="f">Series — none picked = any</label>
@@ -1031,7 +1038,7 @@ function openBuilder() {
       <input type="number" id="bxBud" inputmode="decimal" min="0" step="5" value="${o.budget || 0}">
       <label class="f"><input type="checkbox" id="bxCol" ${o.collector ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Play my collector copies too (+, alt art)</label>
       <label class="f"><input type="checkbox" id="bxInc" ${o.incoming ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Count cards on the way</label>
-      ${o.what !== 'every' ? `<label class="f"><input type="checkbox" id="bxFree" ${o.free ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Don't use cards already in my other cores</label>` : '<p class="small muted">Core per colour uses your whole collection and replaces your earlier smart cores. Hand-made cores are kept.</p>'}
+      ${o.what !== 'every' ? `<label class="f"><input type="checkbox" id="bxFree" ${o.free ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Don't use cards already in my other cores</label>` : '<p class="small muted">Core set builds as many good cores as your cards allow (up to 3 per colour) that all pair together. It uses your whole collection and replaces your earlier smart cores. Hand-made cores are kept.</p>'}
       <button class="btn" id="bxGo" style="width:100%;margin-top:14px">Build</button>`;
     const sh = $('#sheet');
     sh.querySelectorAll('[data-what]').forEach(b => b.onclick = () => { o.what = b.dataset.what; if (o.what === 'core') o.cols = o.cols.slice(0, 1); draw(); });
@@ -1056,7 +1063,7 @@ function openBuilder() {
   openSheet('', draw);
 }
 // Turn the panel's choices into builder settings, try every combination, keep the best three
-function runBuilder(o) {
+function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
   const tests = o.series.map(themeTest).filter(Boolean), seriesFn = tests.length ? c => tests.some(t => t(c)) : null;
   const favs = [...new Set([...o.series, ...favList()])].map(themeTest).filter(Boolean), fav = favs.length ? c => favs.some(t => t(c)) : null;
   const themes = seriesFn ? (o.strict ? [seriesFn] : [seriesFn, null]) : [null];
@@ -1065,7 +1072,7 @@ function runBuilder(o) {
   const extra = { include: o.include, exclude: new Set(o.exclude), budget: o.budget, collector: !!o.collector };
   const incCols = [...new Set(Object.keys(o.include).map(n => info(n).colour).filter(Boolean))]; // cards you asked for set the colours
   if (incCols.length) { if (o.what === 'core') o = { ...o, cols: incCols.slice(0, 1) }; else o = { ...o, cols: [...new Set([...incCols, ...o.cols])].slice(0, 2) }; }
-  if (o.what === 'every') return showSmartCores(smartCores(o.incoming, false, { themes, tunes, extra, opp: o.opp !== 'any' ? o.opp : null }));
+  if (o.what === 'every') { const so = { themes, tunes, extra, opp: o.opp !== 'any' ? o.opp : null, incoming: o.incoming }; return showSmartCores(smartCores(o.incoming, false, so), so); }
   const size = o.what === 'deck' ? 50 : 25, colSets = [];
   if (size === 25) (o.cols.length ? o.cols : COLOURS).forEach(c => colSets.push([c]));
   else if (o.cols.length === 2) colSets.push(o.cols);
@@ -1074,9 +1081,9 @@ function runBuilder(o) {
   const seen = new Set(), all = [];
   const jobs = []; for (const cols of colSets) for (const th of themes) for (const tune of tunes) jobs.push([cols, th, tune, null]);
   for (let j = 0; j < jobs.length; j++) { const [cols, th, tune, lead] = jobs[j];
-    const r = autoBuild(cols, o.incoming, o.free, [], size, th, { ...extra, fav, tune, lead }); if (!r.n) continue;
+    const r = autoBuild(cols, o.incoming, o.free, [], size, th, { ...extra, fav, tune, lead, seed: v.seed }); if (!r.n) continue;
     if (!lead && tune === tunes[0]) for (const l of r.leads.slice(1)) for (const t2 of tunes) jobs.push([cols, th, t2, l]); // also try each other main pilot
-    const sig = r.cards.map(e => e.num + 'x' + e.qty).sort().join(); if (seen.has(sig)) continue; seen.add(sig);
+    const sig = sigOf(r.cards); if (seen.has(sig) || (v.avoid && v.avoid.has(sig))) continue; seen.add(sig); r.sig = sig;
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
     r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateVs(m, o.opp) + 1.2 * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
   all.sort((a, b) => b.rank - a.rank);
@@ -1087,13 +1094,14 @@ function runBuilder(o) {
   const pick = []; for (const r of all) { if (pick.length >= 3) break; if (pick.some(p => p.colours.join() === r.colours.join() && p.m.style === r.m.style) && all.length > 3) continue; pick.push(r); }
   for (const r of all) { if (pick.length >= 3) break; if (!pick.includes(r)) pick.push(r); }
   for (let k = pick.length - 1; k > 0; k--) if (pick[k].m.power < pick[0].m.power - 1.5 && pick[k].n >= pick[0].n) pick.splice(k, 1); // don't pad with clearly worse options
-  showOptions(pick, size, o);
+  if (!pick.length && v.avoid) { toast('No more different builds from these cards — loosen the choices', 3500); return showOptions(v.last, size, o, v); }
+  showOptions(pick, size, o, { ...v, last: pick });
 }
 // One-colour deck → two matching halves: each card's copies shared out, so both halves have the same shape
 function splitHalves(cards) { const A = [], B = []; let na = 0, nb = 0;
   for (const e of cards) { let a = Math.floor(e.qty / 2), b = e.qty - a; if (b > a && nb > na) [a, b] = [b, a]; if (a) A.push({ num: e.num, qty: a }); if (b) B.push({ num: e.num, qty: b }); na += a; nb += b; }
   return [A, B]; }
-function showOptions(list, size, o) {
+function showOptions(list, size, o, v = {}) {
   if (!list.length) return openSheet(`<h3>Couldn't build that</h3><p class="muted">Not enough cards match. Try more colours or series, turn off "Only these series", or add a budget.</p><button class="btn" id="bxBack" style="width:100%">Back</button>`, () => { $('#bxBack').onclick = openBuilder; });
   let i = 0; const cap = s => s[0].toUpperCase() + s.slice(1);
   const draw = () => {
@@ -1117,10 +1125,12 @@ function showOptions(list, size, o) {
       ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.slice(0, 4).map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
       <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty, need: Math.max(0, e.qty - playableByNum(e.num, o.incoming)) })).join('')}</div>
       <label class="f" for="opName">Name</label><input type="text" id="opName" value="${esc(name)}">
-      <button class="btn" id="opSave" style="width:100%;margin-top:12px">${size === 50 ? 'Save deck' : 'Save core'}</button>
+      <div class="row" style="gap:8px;margin-top:12px"><button class="btn grow" id="opSave">${size === 50 ? 'Save deck' : 'Save core'}</button><button class="btn ghost grow" id="opMore">Try something different</button></div>
       ${r.buys.length ? '<p class="small muted">Saves as a target in Building, so the cards to buy go on your shopping list.</p>' : ''}`;
     hydrateImages($('#sheet'));
     $('#opBack').onclick = openBuilder;
+    $('#opMore').onclick = () => { $('#opMore').disabled = true; $('#opMore').textContent = 'Trying…';
+      const avoid = new Set([...(v.avoid || []), ...list.map(x => x.sig || sigOf(x.cards))]); setTimeout(() => runBuilder(o, { seed: Math.random() * 1e9 | 0, avoid, last: list }), 30); };
     $('#sheet').querySelectorAll('[data-op]').forEach(b => b.onclick = () => { i = +b.dataset.op; draw(); $('#sheet').scrollTop = 0; });
     $('#opSave').onclick = () => {
       const nm = $('#opName').value.trim() || name, status = r.buys.length ? 'target' : 'built';
@@ -1165,6 +1175,7 @@ function linksTo(u, p) {
   const pn = (p.name || '').toLowerCase(), pt = (p.trait || '').toLowerCase();
   return linkParts(u).some(l => /trait$/i.test(l) ? pt.includes(l.replace(/\s*trait$/i, '').trim().toLowerCase()) : l.toLowerCase() === pn);
 }
+const jitter = (num, seed) => { let h = seed | 0; for (const ch of num) h = Math.imul(h ^ ch.charCodeAt(0), 2654435761); return ((h >>> 0) % 1000) / 1000 * 1.4 - 0.7; };
 // ---- Reading card effects (catalog.json has each card's effect text since v1.23) ----
 const FX = {};
 function fx(c) {
@@ -1190,7 +1201,8 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
   const otherNums = new Set(other.map(e => e.num)), otherQty = {}; for (const e of other) otherQty[e.num] = (otherQty[e.num] || 0) + e.qty; // max 4 copies across the whole deck
   const inc = opts.include || {}, budget = +opts.budget || 0; // include = { number: copies } to build around · budget = US$ you're happy to spend on missing cards
   const pool = Object.values(CATALOG).filter(c => cols.includes(c.colour) && (!theme || theme(c) || inc[c.num]) && !RESOURCE_TYPES.has(c.type) && !RULES.banned[c.num] && !(opts.lock && opts.lock.has(c.num)) && !(opts.noVanilla && c.vanilla) && !(opts.exclude && opts.exclude.has(c.num)))
-    .map(c => { const own = Math.max(0, (opts.collector ? ownedByNum(c.num, incoming) : playableByNum(c.num, incoming)) - (usedElsewhere[c.num] || 0)); return { ...c, own, avail: Math.max(own, inc[c.num] || 0, budget > 0 && c.usd != null ? 4 : 0) }; }).filter(c => c.avail > 0);
+    .map(c => { const cap = opts.caps ? (opts.caps[c.num] ?? 0) : 99, own = Math.min(cap, Math.max(0, (opts.collector ? ownedByNum(c.num, incoming) : playableByNum(c.num, incoming)) - (usedElsewhere[c.num] || 0)));
+      return { ...c, own, avail: Math.min(cap, Math.max(own, inc[c.num] || 0, budget > 0 && c.usd != null ? 4 : 0)) }; }).filter(c => c.avail > 0);
   const ownM = {}; pool.forEach(c => ownM[c.num] = c.own); let spent = 0;
   const base = c => {
     let s = RAR_SCORE[(c.rarity || '').replace(/\+/g, '')] || 2;
@@ -1199,7 +1211,8 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
     if (c.lv == null && c.type === 'Unit') s -= 0.3;
     s += 0.8 * fx(c).value;                                                     // what the card actually does
     if (budget && c.own < 4 && !inc[c.num]) s -= c.own === 0 ? 0.9 : 0.3;     // cards you'd have to buy only win when they're clearly better
-    if (opts.fav && opts.fav(c)) s += 0.6;                                     // your favourite series get the nod when it's close
+    if (opts.fav && opts.fav(c)) s += 0.6;
+    if (opts.seed) s += jitter(c.num, opts.seed);                              // "Try another": nudges scores so a different, still-good build comes out                                     // your favourite series get the nod when it's close
     if (opts.tune) s += tuneScore(c, opts.tune);
     if (size <= 25 && c.vanilla && !inc[c.num]) s -= 0.6;                      // a plain 2/2 blocks pairing with any other core that has one
     return s;
@@ -1263,7 +1276,7 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
     if (got < tgt) notes.push(`Only ${got} of ${tgt} ${label.toLowerCase()}`);
   });
   const unitTgt = plan.slice(0, 3).reduce((t, x) => t + x[2], 0), unitsIn = () => Object.entries(picked).reduce((t, [n, q]) => t + (info(n).type === 'Unit' ? q : 0), 0);
-  const fill = () => { for (const ok of [c => c.type === 'Unit' && unitsIn() < unitTgt, c => c.type !== 'Pilot', c => chosen.includes(c)]) if (total() < size) for (const c of pool.filter(ok).sort((a, b) => score(b) - score(a))) { if (total() >= size) break; take(c, size - total()); } }; // pilots only as a last resort
+  const fill = () => { for (const ok of [c => c.type === 'Unit' && inFaction(c) && unitsIn() < unitTgt, c => c.type !== 'Pilot' && inFaction(c), c => c.type !== 'Pilot', c => chosen.includes(c)]) if (total() < size) for (const c of pool.filter(ok).sort((a, b) => score(b) - score(a))) { if (total() >= size) break; take(c, size - total()); } }; // pilots only as a last resort
   fill();
   // any pilot whose units didn't make it in is dead weight: swap it out
   for (const num of Object.keys(picked)) { const p = info(num); if (p.type !== 'Pilot' || inc[num]) continue;
@@ -1382,51 +1395,115 @@ function coreLabel(cards, col, m) {
   const pilot = cards.filter(e => info(e.num).type === 'Pilot').sort((a, b) => b.qty - a.qty)[0];
   return `${col[0].toUpperCase() + col.slice(1)}${top && q >= n * 0.4 ? ' ' + top : ''} · ${m.style}${pilot ? ` (${info(pilot.num).name.split(' ')[0]})` : ''}`;
 }
-// Build the strongest 25-card core in every colour (two if the collection is deep enough).
-// Rules from the cores plan: one colour per core, no card number in two cores, plain 2/2s in one core only.
-function smartCores(incoming, keepOthers, o = {}) {
-  const fav = favTest(), themes = o.themes || [null, ...favList().map(themeTest).filter(Boolean)], tunes = o.tunes || [null, 'fast', 'tough', 'power'], extra = o.extra || {};
-  const best = (col, lock, noVanilla, partial = false) => { let top = null;
-    const jobs = []; for (const th of themes) for (const tune of tunes) jobs.push([th, tune, null]);
-    for (let j = 0; j < jobs.length; j++) { const [th, tune, lead] = jobs[j];
-      const r = autoBuild(col, incoming, keepOthers, [], 25, th, { ...extra, lock, noVanilla, fav, tune, lead, skipSmart: true });
-      if (!lead && tune === tunes[0]) for (const l of r.leads.slice(1)) for (const t2 of tunes) jobs.push([th, t2, l]);
-      if (r.n < 25 && !(partial && r.n >= 15)) continue;
-      if (partial && top && r.n < top.r.n) continue;
-      const m = deckProfile(r.cards), favShare = fav ? r.cards.filter(e => fav(info(e.num))).reduce((t, e) => t + e.qty, 0) / 25 : 0;
-      const sc = (o.opp ? rateVs(m, o.opp) : m.power + 0.15 * (m.vs.Aggro + m.vs.Midrange + m.vs.Control)) + 0.8 * favShare;
-      if (!top || sc > top.sc) top = { r, m, sc, col }; }
-    return top; };
-  const out = [];
-  for (const col of COLOURS) { const lock = new Set();
-    for (let k = 0; k < 2; k++) { const t = best(col, lock, true) || (k === 0 && best(col, lock, true, true)); if (!t || (k === 1 && t.m.power < 4)) break; t.r.cards.forEach(e => lock.add(e.num)); out.push(t); } }
-  // plain 2/2s: only one core gets to use them — the one that gains most
-  let gain = null;
-  for (const t of out) { const lock = new Set(out.filter(o => o !== t && o.col === t.col).flatMap(o => o.r.cards.map(e => e.num)));
-    const v = best(t.col, lock, false); if (v && v.r.cards.some(e => info(e.num).vanilla) && v.m.power - t.m.power > 0.2 && (!gain || v.m.power - t.m.power > gain.d)) gain = { t, v, d: v.m.power - t.m.power }; }
-  if (gain) out[out.indexOf(gain.t)] = gain.v;
-  for (const t of out) t.name = coreLabel(t.r.cards, t.col, t.m);
-  return out.sort((a, b) => b.m.power - a.m.power);
+// ---------- Core set: a stable of cores that pair with each other (like the 7-cores plan) ----------
+// Rules: one colour per core · no plain 2/2s in any core (so no pair can break the 1-plain-unit rule) ·
+// a card shared by two cores of the SAME colour stays at 4 or fewer between them (they might be paired) ·
+// never uses more physical copies than you own across all the cores · a core 1–3 short gets a flex slot
+// that changes with its partner's colour (spare cards no other core of that colour uses).
+function setCaps(col, others, incoming, extra) {
+  const caps = {}, used = {}, same = {};
+  for (const t of others) for (const e of t.r.cards) { used[e.num] = (used[e.num] || 0) + e.qty; if (t.col === col) same[e.num] = Math.max(same[e.num] || 0, e.qty); }
+  for (const c of Object.values(CATALOG)) if (c.colour === col) {
+    const own = extra.collector ? ownedByNum(c.num, incoming) : playableByNum(c.num, incoming);
+    caps[c.num] = Math.max(0, Math.min(extra.budget ? 4 : own - (used[c.num] || 0), 4 - (same[c.num] || 0))); }
+  return caps;
 }
-function showSmartCores(list, incoming) {
-  if (!list.length) return openSheet('<h3>Not enough cards yet</h3><p class="muted">No colour has 25 playable cards. Scan more in, or tick "Include cards on the way".</p>');
+function bestCore(col, caps, incoming, o, seed = 0, avoid = null, partial = false) {
+  const fav = favTest(), themes = o.themes || [null, ...favList().map(themeTest).filter(Boolean)], tunes = o.tunes || [null, 'fast', 'tough', 'power'], extra = o.extra || {};
+  let top = null; const jobs = []; for (const th of themes) for (const tune of tunes) jobs.push([th, tune, o.lead || null]);
+  for (let j = 0; j < jobs.length; j++) { const [th, tune, lead] = jobs[j];
+    const r = autoBuild(col, incoming, false, [], 25, th, { ...extra, caps, noVanilla: true, fav, tune, lead, seed, skipSmart: true });
+    if (!lead && tune === tunes[0]) for (const l of r.leads.slice(1)) for (const t2 of tunes) jobs.push([th, t2, l]);
+    if (o.lead && r.cards.find(e => e.num === o.lead) == null) continue; // that pilot couldn't lead
+    if (r.n < (partial ? 22 : 25)) continue;
+    if (avoid && avoid.has(sigOf(r.cards))) continue;
+    const m = deckProfile(r.cards), favShare = fav ? r.cards.filter(e => fav(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
+    const sc = (o.opp ? rateVs(m, o.opp) : m.power + 0.15 * (m.vs.Aggro + m.vs.Midrange + m.vs.Control)) + 0.8 * favShare + (r.n - 25) * 0.4;
+    if (!top || sc > top.sc) top = { r, m, sc, col }; }
+  return top;
+}
+const sigOf = cards => cards.map(e => e.num + 'x' + e.qty).sort().join();
+function flexFor(t, all, incoming, extra) { // for a short core: one spare card per partner colour
+  const short = 25 - t.r.n; if (short <= 0 || short > 3) return null;
+  const flex = {};
+  for (const col of COLOURS) {
+    const inCol = new Set(all.filter(x => x.col === col).flatMap(x => x.r.cards.map(e => e.num)));
+    const used = {}; for (const x of all) for (const e of x.r.cards) used[e.num] = (used[e.num] || 0) + e.qty;
+    const cand = Object.values(CATALOG).filter(c => c.colour === col && !RESOURCE_TYPES.has(c.type) && !c.vanilla && !RULES.banned[c.num] && !inCol.has(c.num)
+      && (extra.collector ? ownedByNum(c.num, incoming) : playableByNum(c.num, incoming)) - (used[c.num] || 0) >= short)
+      .sort((a, b) => (fx(b).value + (RAR_SCORE[b.rarity] || 2) + (b.type === 'Unit' ? 0.5 : 0)) - (fx(a).value + (RAR_SCORE[a.rarity] || 2) + (a.type === 'Unit' ? 0.5 : 0)));
+    if (cand[0]) flex[col] = [cand[0].num, short];
+  }
+  return Object.keys(flex).length ? flex : null;
+}
+function smartCores(incoming, keepOthers, o = {}) {
+  const extra = o.extra || {}, out = [], seed = o.seed || 0;
+  const perms = a => a.length <= 1 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map(p => [x, ...p]));
+  for (const col of COLOURS) {
+    const first = bestCore(col, setCaps(col, out, incoming, extra), incoming, o, seed, null, true); if (!first) continue;
+    const leads = first.r.leads.slice(0, 3); let bestSet = [first], bestVal = first.m.power - 3;
+    for (const order of perms(leads)) { // e.g. Kira first then McGillis, or McGillis first then Kira
+      const set = [];
+      for (const lead of order) { const t = bestCore(col, setCaps(col, [...out, ...set], incoming, extra), incoming, { ...o, lead, tunes: o.tunes || [null, 'fast', 'tough'], themes: [null] }, seed, null, true);
+        if (t && t.m.power >= 4) set.push(t); }
+      const val = set.reduce((v, t) => v + t.m.power - 3 - (25 - t.r.n) * 0.3, 0); // more good cores beats one great one
+      if (set.length && val > bestVal) { bestVal = val; bestSet = set; } }
+    out.push(...bestSet);
+  }
+  for (const t of out) { t.flex = flexFor(t, out, incoming, extra); t.name = coreLabel(t.r.cards, t.col, t.m); }
+  return out.sort((a, b) => COLOURS.indexOf(a.col) - COLOURS.indexOf(b.col) || b.m.power - a.m.power);
+}
+function rerollCore(list, k, o) { o = { ...o, lead: null }; // a different core in the same slot, keeping the rest of the set
+  const t = list[k], others = list.filter((_, i) => i !== k), extra = o.extra || {};
+  t.tried = t.tried || new Set([sigOf(t.r.cards)]);
+  const caps = setCaps(t.col, others, o.incoming, extra);
+  for (let tries = 0; tries < 6; tries++) {
+    const v = bestCore(t.col, caps, o.incoming, o, Math.random() * 1e9 | 0, t.tried, true);
+    if (v) { v.tried = t.tried; v.tried.add(sigOf(v.r.cards)); list[k] = v; for (const x of list) x.flex = flexFor(x, list, o.incoming, extra); v.name = coreLabel(v.r.cards, v.col, v.m); return true; } }
+  return false;
+}
+function setPairs(list) { // check every pair of a core set: rows of [i, j, errors]
+  const out = [];
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    S.cores._A = { id: '_A', cards: list[i].r.cards, flex: list[i].flex }; S.cores._B = { id: '_B', cards: list[j].r.cards, flex: list[j].flex };
+    out.push([i, j, checkDeck({ a: '_A', b: '_B' })]); }
+  delete S.cores._A; delete S.cores._B; return out;
+}
+function pairGrid(names, pairs) { // small OK / ✗ table
+  const ab = s => s.replace(/\s*[·(].*$/, '').split(' ').slice(-1)[0].slice(0, 6);
+  const cell = (i, j) => { if (i === j) return '<td class="muted">–</td>'; const p = pairs.find(x => (x[0] === i && x[1] === j) || (x[0] === j && x[1] === i)); return p[2].legal ? '<td class="ok">✓</td>' : `<td class="bad" title="${esc(p[2].errors[0])}">✗</td>`; };
+  return `<div style="overflow-x:auto"><table class="small" style="border-collapse:collapse;margin-top:6px"><tr><td></td>${names.map((n, j) => `<th style="padding:2px 4px;font-weight:600">${j + 1}</th>`).join('')}</tr>
+    ${names.map((n, i) => `<tr><th style="text-align:left;padding:2px 6px;font-weight:600;white-space:nowrap">${i + 1}. ${esc(ab(n))}</th>${names.map((_, j) => cell(i, j)).join('')}</tr>`).join('')}</table></div>
+    ${pairs.filter(p => !p[2].legal).map(p => `<div class="small bad">${p[0] + 1} + ${p[1] + 1}: ${esc(p[2].errors[0])}</div>`).join('')}`;
+}
+function showSmartCores(list, o = {}) {
+  if (!list.length) return openSheet('<h3>Not enough cards yet</h3><p class="muted">No colour has 20+ playable cards. Scan more in, or tick "Count cards on the way".</p>');
   const old = Object.values(S.cores).filter(c => c.smart);
-  openSheet(`<h3>${list.length} smart cores</h3>
-    <p class="small muted">One colour each, no card number shared between them, plain 2/2s in one core only — so any two of different colours snap into a legal deck. Favourites: ${esc(favList().join(', ') || 'none')}.</p>
-    ${list.map((t, k) => `<div class="card" style="margin-top:10px"><div class="row"><span class="dot" style="background:${colourVar(t.col)}"></span><b class="grow">${esc(t.name)}</b><b class="${t.r.n === 25 ? 'ok' : 'warn'}">${t.r.n}/25</b></div>
+  const draw = () => {
+    const pairs = setPairs(list), legal = pairs.filter(p => p[2].legal).length;
+    $('#sheet').innerHTML = `<div class="row"><button class="btn ghost sm" id="smBack">‹ Change</button><div class="grow"></div><button class="btn ghost sm" id="smAll">Try another set</button></div>
+    <h3 style="margin-top:10px">${list.length} cores · ${legal} of ${pairs.length} pairs legal</h3>
+    <p class="small muted">One colour each, no plain 2/2s, cards shared by same-colour cores kept to 4 between them, and never more copies than you own across the set. Not happy with one? Tap <b>Try another</b> on it.</p>
+    ${list.map((t, k) => `<div class="card" style="margin-top:10px"><div class="row"><span class="dot" style="background:${colourVar(t.col)}"></span><b class="grow">${k + 1}. ${esc(t.name)}</b><b class="${t.r.n === 25 ? 'ok' : 'warn'}">${t.r.n}${t.flex ? '+' + (25 - t.r.n) + ' flex' : '/25'}</b></div>
       ${profileLine(t.r.cards, t.m)}${shapeLine(t.r.cards, 25)}
-      ${t.r.n < 25 ? `<div class="small warn">Short ${25 - t.r.n} — buy the upgrades below to finish it</div>` : ''}${t.r.notes.length ? `<div class="small muted">${esc(t.r.notes[0])}</div>` : ''}
-      ${t.r.upgrades.length ? `<div class="small muted" style="margin-top:4px">Upgrade: ${t.r.upgrades.slice(0, 3).map(u => `${esc(u.name)} ×${u.need}${u.usd ? ` (~US$${u.usd < 10 ? u.usd.toFixed(2) : Math.round(u.usd)})` : ''}`).join(' · ')}</div>` : ''}
-      <details style="margin-top:6px"><summary class="small">Show cards</summary><div class="grid" style="margin-top:8px" data-g="${k}"></div></details></div>`).join('')}
+      ${t.flex ? `<div class="small muted">Flex slot (matches the partner's colour): ${Object.entries(t.flex).map(([c, [n, q]]) => `${c} → ${esc(info(n).name)} ×${q}`).join(' · ')}</div>` : t.r.n < 25 ? `<div class="small warn">Short ${25 - t.r.n} — no spare cards to flex with</div>` : ''}
+      ${t.r.notes.length ? `<div class="small muted">${esc(t.r.notes[0])}</div>` : ''}
+      <details style="margin-top:6px"><summary class="small">Show cards</summary><div class="grid" style="margin-top:8px" data-g="${k}"></div></details>
+      <button class="btn ghost sm" data-rr="${k}" style="margin-top:8px">Try another</button></div>`).join('')}
+    <h2>Pairings</h2>${pairGrid(list.map(t => t.name), pairs)}
     ${old.length ? `<p class="small warn" style="margin-top:12px">Saving replaces your ${old.length} earlier smart core${old.length === 1 ? '' : 's'} (and decks made from them). Cores you made yourself are kept.</p>` : ''}
-    <div class="row" style="gap:8px;margin-top:12px"><button class="btn grow" id="smSave">Save all ${list.length}</button><button class="btn ghost" id="smClose">Close</button></div>`, root => {
+    <div class="row" style="gap:8px;margin-top:12px"><button class="btn grow" id="smSave">Save all ${list.length}</button><button class="btn ghost" id="smClose">Close</button></div>`;
+    const root = $('#sheet');
     root.querySelectorAll('details').forEach((d, k) => d.ontoggle = () => { const g = d.querySelector('[data-g]'); if (d.open && !g.innerHTML) { g.innerHTML = list[k].r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join(''); hydrateImages(g); } });
-    $('#smClose').onclick = closeSheet;
+    root.querySelectorAll('[data-rr]').forEach(b => b.onclick = () => { b.disabled = true; b.textContent = 'Trying…'; setTimeout(() => { const k = +b.dataset.rr; if (!rerollCore(list, k, o)) toast('No other good version of this core from your cards'); draw(); }, 30); });
+    $('#smAll').onclick = () => { $('#smAll').disabled = true; $('#smAll').textContent = 'Building…'; setTimeout(() => { const nl = smartCores(o.incoming, false, { ...o, seed: Math.random() * 1e9 | 0 }); list.splice(0, list.length, ...nl); draw(); }, 30); };
+    $('#smBack').onclick = openBuilder; $('#smClose').onclick = closeSheet;
     $('#smSave').onclick = () => {
       for (const c of old) { delete S.cores[c.id]; for (const d of Object.values(S.decks)) if (d.a === c.id || d.b === c.id) delete S.decks[d.id]; }
-      for (const t of list) { const id = uid(); S.cores[id] = { id, name: t.name, status: t.r.buys && t.r.buys.length ? 'target' : 'built', smart: true, cards: t.r.cards }; }
+      for (const t of list) { const id = uid(); S.cores[id] = { id, name: t.name, status: t.r.buys && t.r.buys.length ? 'target' : 'built', smart: true, cards: t.r.cards, ...(t.flex ? { flex: t.flex } : {}) }; }
       save(); closeSheet(); go('build'); toast(`Saved ${list.length} cores`); };
-  });
+  };
+  openSheet('', draw);
 }
 // Every legal pair of your saved cores, ranked for the opponent you pick
 function bestPairs(opp) {
@@ -1451,6 +1528,9 @@ function openDeckFinder() {
   openSheet(`<h3>Find my best deck</h3><p class="small muted">Ranks every legal pair of your saved cores. Pick what you're up against.</p>
     <label class="f" for="dfOpp">Playing against</label><select id="dfOpp">${META.map(([s, n]) => `<option value="${esc(s + '|' + n)}" ${s + '|' + n === opp ? 'selected' : ''}>${esc(n)}${s !== 'any' && s !== n ? ' (' + s.toLowerCase() + ')' : ''}</option>`).join('')}</select>
     <div id="dfList"></div>
+    ${(() => { const cs = Object.values(S.cores).filter(c => c.status === 'built' && coreCount(c) > 0); if (cs.length < 2) return '';
+      const pairs = []; for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) pairs.push([i, j, checkDeck({ a: cs[i].id, b: cs[j].id })]);
+      return `<h2>All pairings</h2>${pairGrid(cs.map(c => c.name), pairs)}`; })()}
     <button class="btn ghost" id="dfFresh" style="width:100%;margin-top:12px">Or build a fresh 50 to beat them</button>
     <p class="small muted">Card effects aren't in the card list, so this judges by stats for the level, pilot links, faction, 4-ofs, deck shape and speed. Treat it as a strong starting point, then test it.</p>`, () => {
     $('#dfOpp').onchange = e => { opp = e.target.value; S.settings.opp = opp; save(); draw(); };
@@ -1504,7 +1584,13 @@ function showSuggestion(r) {
 }
 
 // --- decks: pair two cores and check the rules ---
-function deckCards(d) { const m = {}; for (const id of [d.a, d.b]) for (const e of (S.cores[id]?.cards || [])) m[e.num] = (m[e.num] || 0) + e.qty; return Object.entries(m).map(([num, qty]) => ({ num, qty })); }
+function flexCard(core, partner) { // a short core's flex slot: the card that matches its partner's colour
+  if (!core?.flex || !partner) return null; const pc = coreColours(partner)[0] || coreColours(core)[0]; const f = core.flex[pc] || core.flex[coreColours(core)[0]];
+  return f && coreCount(core) + f[1] <= 25 ? { num: f[0], qty: f[1] } : null; }
+function deckCards(d) { const m = {}, A = S.cores[d.a], B = S.cores[d.b];
+  for (const id of [d.a, d.b]) for (const e of (S.cores[id]?.cards || [])) m[e.num] = (m[e.num] || 0) + e.qty;
+  for (const f of [flexCard(A, B), flexCard(B, A)]) if (f) m[f.num] = (m[f.num] || 0) + f.qty;
+  return Object.entries(m).map(([num, qty]) => ({ num, qty })); }
 // Deck shape, from Bandai's deck-building guide (25–28 Units, 6–8 Pilots, 8–10 Commands, 4–6 Bases, 16–20 Units at Lv3 or lower)
 // and the averages of Bandai's own starter-deck lists (about 31 Units, 9 Pilots, 6 Commands, 4 Bases, mostly 4-ofs, 13–16 different cards)
 const SHAPE = { units: [25, 31], pilots: [6, 9], commands: [6, 10], bases: [4, 6], early: [16, 20], distinct: [12, 18] };
@@ -1674,7 +1760,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.27 (build-around fixes) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.28 (core sets, try another) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
@@ -1737,6 +1823,62 @@ async function exportPDF({ inc, res, val, colour }) {
   doc.autoTable({ head, body, startY: 27, styles: { fontSize: 8.5, cellPadding: 1.4 }, headStyles: { fillColor: [80, 60, 140] }, columnStyles: { 1: { cellWidth: 62 } },
     didDrawPage: d => { doc.setFontSize(8); doc.setTextColor(140); doc.text(`Page ${doc.internal.getNumberOfPages()}`, 196, 290, { align: 'right' }); doc.setTextColor(0); } });
   await shareOrDownload(doc.output('blob'), `my-gundam-cards-${new Date().toISOString().slice(0, 10)}.pdf`, 'My Gundam card collection');
+}
+// ---------- Cores report (PDF), laid out like the "7 built cores" sheet ----------
+async function exportCoresPDF() {
+  if (!window.jspdf) await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
+  if (!window.jspdf.jsPDF.API.autoTable) await loadScript('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js');
+  const cores = Object.values(S.cores).filter(c => c.status === 'built' && coreCount(c) > 0);
+  if (!cores.length) { toast('No saved cores yet'); throw new Error('none'); }
+  const { jsPDF } = window.jspdf, doc = new jsPDF({ unit: 'mm', format: 'a4' }), cap = t => t ? t[0].toUpperCase() + t.slice(1) : '';
+  const date = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+  let y = 16; const line = (t, size = 9, bold = false) => { doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size); for (const l of doc.splitTextToSize(t, 182)) { if (y > 280) { doc.addPage(); y = 16; } doc.text(l, 14, y); y += size * 0.45; } };
+  line(`Gundam Card Game: ${cores.length} built cores`, 16, true); y += 1;
+  line(`GTCG My Card Collection · ${date}`, 9); y += 2;
+  line('Deck rules used', 11, true);
+  ['Two 25-card cores make one 50-card main deck. Each core is one colour; a deck has at most 2 colours.', 'No more than 4 copies of a card number in the 50.',
+   'Only ONE plain Lv2 / cost 1 / 2-2 unit (no effect) card number per deck.', `Ban list: ${Object.entries(RULES.banned).map(([n, x]) => x + ' ' + n).join(', ')} banned; ${Object.entries(RULES.restricted).map(([n, k]) => info(n).name + ' ' + n + ' max ' + k).join(', ')}; banned pairs ${RULES.bannedPairs.map(([a, b]) => info(a).name + ' ' + a + ' + ' + info(b).name + ' ' + b).join('; ')}.`,
+   'Tokens and the 10-card resource deck do not count toward the 50.', 'A core marked "+ flex" is short a card or two; its flex card changes to match the partner core\'s colour.'].forEach(t => line('• ' + t));
+  y += 3;
+  for (const c of cores) {
+    const m = deckProfile(c.cards), cards = c.cards.slice().sort(sortByCurve), sh = deckShape(cards), n = coreCount(c);
+    if (y > 230) { doc.addPage(); y = 16; }
+    line(`${c.name}  (${cap(coreColours(c)[0])}, ${m.style}, power ${m.power.toFixed(1)})`, 11, true);
+    const body = cards.map(e => { const i = info(e.num); return [e.num, i.name, i.type, i.lv ?? '', e.qty]; });
+    body.push([{ content: `Total (Units ${sh.units}, Pilots ${sh.pilots}, Commands ${sh.commands}, Bases ${sh.bases})`, colSpan: 4, styles: { fontStyle: 'bold' } }, { content: n, styles: { fontStyle: 'bold' } }]);
+    if (c.flex && n < 25) body.push([{ content: 'Flex: ' + Object.entries(c.flex).map(([col, [num, q]]) => `${info(num).name} ${num} (${col})`).join(' / '), colSpan: 4 }, '+' + (25 - n)]);
+    doc.autoTable({ head: [['No.', 'Card', 'Type', 'Lv', 'Qty']], body, startY: y, margin: { left: 14 }, styles: { fontSize: 8.5, cellPadding: 1.2 }, headStyles: { fillColor: [80, 60, 140] }, columnStyles: { 1: { cellWidth: 80 }, 4: { halign: 'right' } } });
+    y = doc.lastAutoTable.finalY + 6;
+  }
+  // pairing check
+  doc.addPage(); y = 16;
+  const pairs = []; for (let i = 0; i < cores.length; i++) for (let j = i + 1; j < cores.length; j++) pairs.push([i, j, checkDeck({ a: cores[i].id, b: cores[j].id })]);
+  const ok = pairs.filter(p => p[2].legal).length, short = s => s.replace(/\s*[·(].*$/, '').slice(0, 14);
+  line(`Pairing check (all ${pairs.length} pairs)`, 12, true); line('50 cards, max 4 copies, max 1 plain 2/2 number, max 2 colours, ban list. OK = legal 50-card deck.'); y += 1;
+  doc.autoTable({ head: [['', ...cores.map((c, i) => String(i + 1))]], body: cores.map((c, i) => [`${i + 1}. ${short(c.name)}`, ...cores.map((_, j) => i === j ? '-' : (pairs.find(p => (p[0] === i && p[1] === j) || (p[0] === j && p[1] === i))[2].legal ? 'OK' : 'NO'))]),
+    startY: y, margin: { left: 14 }, styles: { fontSize: 8, cellPadding: 1.2, halign: 'center' }, columnStyles: { 0: { halign: 'left', cellWidth: 40 } }, headStyles: { fillColor: [80, 60, 140] },
+    didParseCell: d => { if (d.section === 'body' && d.cell.raw === 'NO') d.cell.styles.textColor = [200, 40, 40]; } });
+  y = doc.lastAutoTable.finalY + 5;
+  line(`${ok} of ${pairs.length} pairs are legal.`, 10, true);
+  pairs.filter(p => !p[2].legal).forEach(p => line(`• ${cores[p[0]].name} + ${cores[p[1]].name}: ${p[2].errors.join('; ')}`));
+  // shared numbers between cores of the same colour
+  const shared = []; for (const p of pairs) { const A = cores[p[0]], B = cores[p[1]]; for (const e of A.cards) { const x = B.cards.find(f => f.num === e.num); if (x) shared.push(`${short(A.name)} + ${short(B.name)}: ${info(e.num).name} ${e.num} ${e.qty + x.qty}`); } }
+  if (shared.length) { y += 2; line('Shared card numbers (legal, but watch copies)', 11, true); shared.forEach(t => line('• ' + t)); }
+  // copies used across cores vs owned
+  const use = {}; for (const c of cores) for (const e of c.cards) use[e.num] = (use[e.num] || 0) + e.qty;
+  const over = Object.entries(use).filter(([n, q]) => q > playableByNum(n, true));
+  if (over.length) { y += 2; line('Not enough copies to build every core at once', 11, true); over.forEach(([n, q]) => line(`• ${info(n).name} ${n}: ${q} across cores, you own ${playableByNum(n, true)}`)); }
+  // spares and plain 2/2s
+  const spare = Object.values(CATALOG).filter(c => !RESOURCE_TYPES.has(c.type) && playableByNum(c.num, true) - (use[c.num] || 0) > 0).map(c => [c, playableByNum(c.num, true) - (use[c.num] || 0)]);
+  y += 2; line('Not in any core / spares', 11, true);
+  const sp = spare.filter(([c]) => !c.vanilla), van = spare.filter(([c]) => c.vanilla);
+  if (sp.length) line(sp.sort((a, b) => COLOURS.indexOf(a[0].colour) - COLOURS.indexOf(b[0].colour)).map(([c, q]) => `${c.name} ${c.num} x${q}`).join(', ') + '.');
+  if (van.length) line('Plain 2/2s kept out of all cores: ' + van.map(([c, q]) => `${c.name} ${c.num} x${q}`).join(', ') + '.');
+  // buy list from target cores
+  const need = Object.entries(needs('target')).map(([n, q]) => [n, q - playableByNum(n, true)]).filter(x => x[1] > 0);
+  if (need.length) { y += 2; line('Buy list (from cores you\'re building)', 11, true); line(need.map(([n, q]) => `${info(n).name} ${n} x${q}`).join(', ') + '.'); }
+  const pages = doc.internal.getNumberOfPages(); for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(140); doc.text(`GCG cores · page ${i} of ${pages}`, 196, 290, { align: 'right' }); doc.setTextColor(0); }
+  await shareOrDownload(doc.output('blob'), `gcg-cores-${today()}.pdf`, 'My GCG cores');
 }
 async function shareOrDownload(blob, name, title) {
   const file = new File([blob], name, { type: blob.type });
