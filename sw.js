@@ -1,6 +1,6 @@
 // GTCG My Card Collection — service worker
 // Keeps the app working offline and receives screenshots shared from other apps.
-const SHELL = 'gtcg-shell-v27';
+const SHELL = 'gtcg-shell-v28';
 const IMAGES = 'gtcg-card-pictures';
 const LIBS = 'gtcg-libs-v1';
 const SHARED = 'gtcg-shared';
