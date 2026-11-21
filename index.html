@@ -1006,6 +1006,7 @@ const SERIES_CHIPS = ['IBO', 'Seed', 'Destiny', 'Wing', '00', 'Witch', 'Unicorn'
 const BUILD_DEFAULT = () => ({ meta: true, split: 25, anySplit: false, what: 'core', cols: [], series: [], strict: false, style: 'auto', opp: 'any', include: {}, exclude: [], budget: 0, incoming: !!S.settings.includeIncoming, free: true });
 function openBuilder() {
   const o = Object.assign(BUILD_DEFAULT(), S.settings.build || {}); let q = '';
+  if (o.opp && o.opp !== 'any') { o.vs = { ...(o.vs || {}), [o.oppName || o.opp]: 'strong' }; } o.opp = 'any'; // older single "Playing against" choice
   const chip = (attr, val, on, label) => `<button class="chip ${on ? 'on' : ''}" data-${attr}="${esc(val)}">${esc(label)}</button>`;
   const cap = t => t[0].toUpperCase() + t.slice(1);
   const draw = () => {
@@ -1028,8 +1029,11 @@ function openBuilder() {
       <div class="seg">${['auto', 'Aggro', 'Midrange', 'Control'].map(v => `<button data-sty="${v}" class="${o.style === v ? 'on' : ''}">${v === 'auto' ? 'Best' : v}</button>`).join('')}</div>
       <label class="f" style="margin-top:12px"><input type="checkbox" id="bxMeta" ${o.meta !== false ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Use tournament-winning decks as a guide</label>
       <div class="small muted">${metaStats().n ? `${metaStats().n} top-finishing decks from Limitless TCG, updated ${esc(fmtDate(METALIST.updated))}` : 'No tournament decks loaded'} <button class="btn ghost sm" id="bxMetaUp" style="min-height:28px;padding:0 8px">Update</button></div>
-      <label class="f" for="bxOpp">Playing against</label>
-      <select id="bxOpp">${metaList().map(([st, n]) => `<option value="${esc(st)}" ${o.opp === st && (st === 'any' || n === o.oppName) ? 'selected' : ''} data-n="${esc(n)}">${esc(n)}${st !== 'any' && st !== n ? ' (' + st.toLowerCase() + ')' : ''}</option>`).join('')}</select>
+      <label class="f">Match-ups — tick what it must be <b class="ok">strong</b> against, and what it's <b class="bad">OK to be weak</b> against</label>
+      <div class="list">${metaList().filter(([st]) => st !== 'any').map(([st, n]) => { const k = (o.vs || {})[n] || '';
+        return `<div class="li" style="padding:4px 0"><div class="grow small"><b>${esc(n)}</b>${st !== n ? ` <span class="muted">${st.toLowerCase()}</span>` : ''}</div>
+          <label class="small ok" style="display:inline-flex;align-items:center;gap:4px;margin-right:10px"><input type="checkbox" data-vs="${esc(n)}" data-k="strong" ${k === 'strong' ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--ok)">Strong</label>
+          <label class="small bad" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" data-vs="${esc(n)}" data-k="weak" ${k === 'weak' ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--bad)">Weak OK</label></div>`; }).join('')}</div>
       <label class="f" for="bxQ">Build around / leave out</label>
       <input type="search" id="bxQ" placeholder="Search a card, e.g. Barbatos" value="${esc(q)}">
       <div class="list">${hits.map(c => { const play = playableByNum(c.num, true), all = ownedByNum(c.num, true), coll = all - play;
@@ -1051,7 +1055,7 @@ function openBuilder() {
     sh.querySelectorAll('[data-col]').forEach(b => b.onclick = () => { const c = b.dataset.col; if (o.cols.includes(c)) o.cols = o.cols.filter(x => x !== c); else { o.cols.push(c); if (o.cols.length > maxCols) o.cols.shift(); } draw(); });
     sh.querySelectorAll('[data-ser]').forEach(b => b.onclick = () => { const t = b.dataset.ser; o.series = o.series.includes(t) ? o.series.filter(x => x !== t) : [...o.series, t]; draw(); });
     sh.querySelectorAll('[data-sty]').forEach(b => b.onclick = () => { o.style = b.dataset.sty; draw(); });
-    $('#bxOpp').onchange = e => { o.opp = e.target.value; o.oppName = e.target.selectedOptions[0].dataset.n; save(); };
+    sh.querySelectorAll('[data-vs]').forEach(c => c.onchange = () => { o.vs = o.vs || {}; const n = c.dataset.vs; if (c.checked) o.vs[n] = c.dataset.k; else delete o.vs[n]; draw(); });
     const st = $('#bxStrict'); if (st) st.onchange = e => { o.strict = e.target.checked; save(); };
     $('#bxQ').oninput = e => { q = e.target.value.trim().toLowerCase(); draw(); const el = $('#bxQ'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); };
     sh.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { const n = b.dataset.inc; o.include[n] = Math.max(1, Math.min(4, (o.collector ? ownedByNum(n, true) : playableByNum(n, true)) || 4)); o.exclude = o.exclude.filter(x => x !== n); q = ''; draw(); });
@@ -1081,11 +1085,11 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
   const favs = [...new Set([...o.series, ...favList()])].map(themeTest).filter(Boolean), fav = favs.length ? c => favs.some(t => t(c)) : null;
   const themes = seriesFn ? (o.strict ? [seriesFn] : [seriesFn, null]) : [null];
   const tunes = o.style === 'Aggro' ? ['fast'] : o.style === 'Control' ? ['tough'] : o.style === 'Midrange' ? ['power', null] : [null, 'fast', 'tough', 'power'];
-  if (o.opp !== 'any' && COUNTER_TUNE[o.opp] && !tunes.includes(COUNTER_TUNE[o.opp]) && o.style === 'auto') tunes.push(COUNTER_TUNE[o.opp]);
+  if (o.style === 'auto') for (const st of new Set(vsPicks(o.vs).strong)) if (COUNTER_TUNE[st] && !tunes.includes(COUNTER_TUNE[st])) tunes.push(COUNTER_TUNE[st]); // try builds tuned to beat each ticked type
   const extra = { include: o.include, exclude: new Set(o.exclude), budget: o.budget, collector: !!o.collector, meta: o.meta !== false && metaStats().n > 0 };
   const incCols = [...new Set(Object.keys(o.include).map(n => info(n).colour).filter(Boolean))]; // cards you asked for set the colours
   if (incCols.length) { if (o.what === 'core') o = { ...o, cols: incCols.slice(0, 1) }; else o = { ...o, cols: [...new Set([...incCols, ...o.cols])].slice(0, 2) }; }
-  if (o.what === 'every') { const so = { themes, tunes, extra, opp: o.opp !== 'any' ? o.opp : null, incoming: o.incoming }; return showSmartCores(smartCores(o.incoming, false, so), so); }
+  if (o.what === 'every') { const so = { themes, tunes, extra, rate: Object.keys(o.vs || {}).length ? m => rateMulti(m, o.vs) : null, incoming: o.incoming }; return showSmartCores(smartCores(o.incoming, false, so), so); }
   const size = o.what === 'deck' ? 50 : 25, colSets = [];
   if (size === 25) (o.cols.length ? o.cols : COLOURS).forEach(c => colSets.push([c]));
   else if (!o.anySplit) { const X = o.split || 25; // two halves, one per colour, at the chosen split
@@ -1106,7 +1110,7 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
     if (!lead && tune === tunes[0]) for (const l of r.leads.slice(1)) for (const t2 of tunes) jobs.push([cols, th, t2, l]); // also try each other main pilot
     const sig = sigOf(r.cards); if (seen.has(sig) || (v.avoid && v.avoid.has(sig))) continue; seen.add(sig); r.sig = sig;
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
-    r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateVs(m, o.opp) + 1.2 * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
+    r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + 1.2 * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
   all.sort((a, b) => b.rank - a.rank);
   if (o.free) for (const r of all) { // cards in these colours that your other cores are holding back
     const held = {}; for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) { const i = info(e.num); if (r.colours.includes(i.colour) && !RESOURCE_TYPES.has(i.type)) held[e.num] = (held[e.num] || 0) + e.qty; }
@@ -1143,6 +1147,8 @@ function showOptions(list, size, o, v = {}) {
         if (r.n < size) w.push(`Only ${r.n} cards — not enough free cards in ${r.colours.join('/')}`);
         if (r.held && r.held.length && (m.dead > 0 || r.n < size || r.notes.some(x => /^Only/.test(x)))) w.push(`Your other cores already use ${esc(r.held.slice(0, 5).map(n => info(n).name).join(', '))}. Untick "Don't use cards already in my other cores" to let it use them.`);
         return w.length ? `<div class="card" style="margin:8px 0;border-color:#7A5326"><b class="small warn">Weak spots</b><ul class="small" style="padding-left:18px;margin:4px 0">${w.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''; })()}
+      ${(() => { const P = vsPicks(o.vs), weakN = metaList().filter(([st, n]) => st !== 'any' && (o.vs || {})[n] === 'weak').map(x => x[1]);
+        return P.names.length || weakN.length ? `<div class="small" style="margin:4px 0">Your match-ups: ${P.names.map(([n, st]) => `${esc(n)} ${edgeWord(r.m.vs[st])}`).join(' · ')}${weakN.length ? `<span class="muted">${P.names.length ? ' · ' : ''}weak OK vs ${esc(weakN.join(', '))}</span>` : ''}</div>` : ''; })()}
       ${o.meta !== false ? metaGuide(r) : ''}
       ${r.buys.length ? `<div class="card" style="margin:8px 0"><b class="small">To buy · about US$${r.cost.toFixed(2)}</b><div class="small muted">${r.buys.map(b => `${esc(info(b.num).name)} ×${b.need}${b.usd ? ` ($${b.usd.toFixed(2)})` : ''}`).join(' · ')}</div></div>` : '<p class="small ok">All from cards you own.</p>'}
       ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.slice(0, 4).map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
@@ -1470,6 +1476,16 @@ function matchup(m, opp) { // −2 (bad) … +2 (good)
   if (opp === 'Midrange') e += 0.15 * (m.fin - 3) + 2 * (m.link - 0.5) + 0.05 * (m.cmd - 8) + 0.25 * (m.ap + m.hp);
   return Math.round(Math.max(-2, Math.min(2, e)) * 10) / 10;
 }
+function vsPicks(vs = {}) { // the ticked deck types: strong-against styles, weak-OK styles, and names
+  const strong = [], weak = new Set(), names = [];
+  for (const [st, n] of metaList()) { if (st === 'any') continue; if (vs[n] === 'strong') strong.push(st), names.push([n, st]); else if (vs[n] === 'weak') weak.add(st); }
+  return { strong, weak, names };
+}
+function rateMulti(m, vs) { // power, plus how it does against what you ticked; styles it may be weak against don't drag it down
+  const { strong, weak } = vsPicks(vs), av = a => a.reduce((t, x) => t + x, 0) / a.length;
+  if (strong.length) { const e = strong.map(s => m.vs[s]); return m.power + 1.5 * (av(e) + 0.5 * Math.min(...e)); }
+  const ss = STYLES.filter(s => !weak.has(s)); if (!ss.length) return m.power; const e = ss.map(s => m.vs[s]); return m.power + 1.2 * (av(e) + 0.5 * Math.min(...e));
+}
 function rateVs(m, opp) { // one number to rank decks by: power, plus how it does against what they're playing
   const e = opp && opp !== 'any' ? m.vs[opp] : (m.vs.Aggro + m.vs.Midrange + m.vs.Control) / 3 + 0.5 * Math.min(m.vs.Aggro, m.vs.Midrange, m.vs.Control);
   return m.power + 1.2 * e;
@@ -1510,7 +1526,7 @@ function bestCore(col, caps, incoming, o, seed = 0, avoid = null, partial = fals
     if (r.n < (partial ? 22 : 25)) continue;
     if (avoid && avoid.has(sigOf(r.cards))) continue;
     const m = deckProfile(r.cards), favShare = fav ? r.cards.filter(e => fav(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
-    const sc = (o.opp ? rateVs(m, o.opp) : m.power + 0.15 * (m.vs.Aggro + m.vs.Midrange + m.vs.Control)) + 0.8 * favShare + (r.n - 25) * 0.4;
+    const sc = (o.rate ? o.rate(m) : o.opp ? rateVs(m, o.opp) : m.power + 0.15 * (m.vs.Aggro + m.vs.Midrange + m.vs.Control)) + 0.8 * favShare + (r.n - 25) * 0.4;
     if (!top || sc > top.sc) top = { r, m, sc, col }; }
   return top;
 }
@@ -1645,7 +1661,7 @@ function openDeckFinder() {
     <button class="btn ghost" id="dfFresh" style="width:100%;margin-top:12px">Or build a fresh 50 to beat them</button>
     <p class="small muted">Card effects aren't in the card list, so this judges by stats for the level, pilot links, faction, 4-ofs, deck shape and speed. Treat it as a strong starting point, then test it.</p>`, () => {
     $('#dfOpp').onchange = e => { opp = e.target.value; S.settings.opp = opp; save(); draw(); };
-    $('#dfFresh').onclick = () => { const [st, nm] = opp.split('|'); S.settings.build = { ...(S.settings.build || {}), what: 'deck', opp: st, oppName: nm }; save(); openBuilder(); };
+    $('#dfFresh').onclick = () => { const [st, nm] = opp.split('|'); S.settings.build = { ...(S.settings.build || {}), what: 'deck', opp: 'any', vs: st === 'any' ? {} : { [nm]: 'strong' } }; save(); openBuilder(); };
     draw();
   });
 }
@@ -1871,7 +1887,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.30 (tournament guide, colour split) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.31 (match-up ticks) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
