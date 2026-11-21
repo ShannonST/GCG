@@ -111,7 +111,7 @@ nav.tabs .scanbtn span.c{width:48px;height:48px;border-radius:16px;background:va
   <button data-tab="building"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h2l2 11h11l2-8H6"/><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/></svg>Building</button>
   <button data-tab="scan" class="scanbtn" aria-label="Scan a card"><span class="c"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3"/><path d="M16 4h3a1 1 0 0 1 1 1v3"/><path d="M20 16v3a1 1 0 0 1-1 1h-3"/><path d="M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></svg></span></button>
   <button data-tab="build"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5"/><path d="M12 12v9"/><path d="M12 12L4 7.5"/></svg>Build</button>
-  <button data-tab="more"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>More</button>
+  <button data-tab="more"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
 </nav>
 
 <div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
@@ -180,7 +180,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
 const fmtDate = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-const money = n => n == null || isNaN(n) ? '' : '$' + Number(n).toFixed(2);
+const money = n => cash(n, 'AUD'); // eBay AU prices
 const colourVar = c => `var(--${COLOURS.includes(c) ? c : 'none'})`;
 function toast(msg, ms = 2400) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', ms); }
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -193,6 +193,25 @@ function normNum(raw) {
   return s;
 }
 
+// ---------- Currency: prices shown in your chosen currency ----------
+// Card-list prices are TCGplayer (US$); eBay prices are AU$. Converted with a daily exchange rate (open.er-api.com, saved for offline).
+const CURRENCIES = [['AUD', 'Australian dollar'], ['USD', 'US dollar'], ['NZD', 'NZ dollar'], ['GBP', 'British pound'], ['EUR', 'Euro'], ['CAD', 'Canadian dollar'], ['JPY', 'Japanese yen']];
+const CUR = () => S.settings.currency || 'AUD';
+async function loadFx(force) {
+  const f = S.fx; if (!force && f && f.rates && daysSince(f.date) < 1) return;
+  try { const j = await (await fetch('https://open.er-api.com/v6/latest/USD')).json(); if (j.rates) { S.fx = { date: today(), rates: j.rates }; save(); } } catch { }
+}
+function conv(n, from = 'USD', to = CUR()) { // null if no rate yet
+  if (n == null || isNaN(n)) return null; if (from === to) return +n;
+  const r = S.fx && S.fx.rates; if (!r || !r[from] || !r[to]) return null; return n / r[from] * r[to];
+}
+function cash(n, from = 'USD') {
+  if (n == null || isNaN(n)) return '';
+  let v = conv(n, from), c = CUR(); if (v == null) { v = +n; c = from; } // no rate yet: show the original currency
+  try { return new Intl.NumberFormat('en-AU', { style: 'currency', currency: c, maximumFractionDigits: c === 'JPY' ? 0 : 2 }).format(v); } catch { return c + ' ' + v.toFixed(2); }
+}
+const usd = n => cash(n, 'USD');                 // TCGplayer prices
+const toUSD = n => conv(n, CUR(), 'USD') ?? +n;  // a budget typed in your currency → US$ for the card list
 // ---------- Storage (IndexedDB) ----------
 const DB = {
   db: null,
@@ -364,7 +383,7 @@ function openCard(key) {
     <div class="seg" id="slv">${['', 'single', 'double'].map(v => `<button data-sv="${v}" class="${sleeveOf(c) === v ? 'on' : ''}">${v === '' ? 'None' : v === 'single' ? 'Single' : 'Double'}</button>`).join('')}</div>
     <label class="f" for="notes">Notes</label><input type="text" id="notes" value="${esc(c.notes || '')}">
     <h2>Sold price</h2>
-    ${i.usd != null || i.usdPlus != null ? `<p class="small muted">TCGplayer market (US$): ${i.usd != null ? 'normal US$' + i.usd.toFixed(2) : ''}${i.usd != null && i.usdPlus != null ? ' · ' : ''}${i.usdPlus != null ? 'collector versions from US$' + i.usdPlus.toFixed(2) : ''}</p>` : ''}
+    ${i.usd != null || i.usdPlus != null ? `<p class="small muted">TCGplayer market: ${i.usd != null ? 'normal ' + usd(i.usd) : ''}${i.usd != null && i.usdPlus != null ? ' · ' : ''}${i.usdPlus != null ? 'collector versions from ' + usd(i.usdPlus) : ''}</p>` : ''}
     ${p ? `<div class="card"><div style="font-size:22px;font-weight:700">${money(p.median)} <span class="small muted">each (median)</span></div>
       <div class="small muted">avg ${money(p.avg)} · range ${money(p.min)}–${money(p.max)} · ${p.n} sales${p.from ? ` · sold ${fmtDate(p.from)}–${fmtDate(p.to)}` : ''}</div>
       <div class="small ${daysSince(p.updated) > 30 ? 'warn' : 'muted'}">Updated ${fmtDate(p.updated)}${daysSince(p.updated) > 30 ? ' · may be out of date' : ''}</div></div>` : '<p class="small muted">No price saved yet. Card price only, postage not included.</p>'}
@@ -373,6 +392,7 @@ function openCard(key) {
       <a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${ebayBuyURL([c.num])}">eBay buy</a>
       <a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="https://generalgames.com.au/search?q=${encodeURIComponent(c.num)}">General Games</a>
       ${i.pid ? `<a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="https://www.tcgplayer.com/product/${i.pid}">TCGplayer</a>` : ''}
+      ${relayURL() && S.settings.ebayOk ? `<button class="btn sm" id="cEbay">${ebayLive(c.num) ? `eBay now: from ${cash(S.ebay[c.num].low, S.ebay[c.num].cur)}` : 'Check eBay now'}</button>` : ''}
       <label class="btn sm" style="display:inline-flex;align-items:center">Read sold screenshots<input type="file" accept="image/*" multiple id="shots" hidden></label>
     </div>
     <div class="row" style="margin-top:18px;gap:8px">
@@ -391,6 +411,7 @@ function openCard(key) {
     $('#cEdit').onclick = () => openConfirm({ num: c.num, photo: c.photo, collector: c.collector, art: c.art, rarity: c.rarity, editKey: key });
     const del = $('#cDel'); del.onclick = () => { if (del.dataset.armed) { delete S.cards[key]; save(); closeSheet(); render(); toast('Deleted'); } else { del.dataset.armed = 1; del.textContent = 'Tap again'; setTimeout(() => { delete del.dataset.armed; del.textContent = 'Delete'; }, 3000); } };
     $('#shots').onchange = e => readSoldScreenshots([...e.target.files], c.num);
+    const ce = $('#cEbay'); if (ce) ce.onclick = async () => { if (!S.ebay?.[c.num] || daysSince(S.ebay[c.num].date) >= 1) { ce.disabled = true; ce.textContent = 'Checking eBay…'; try { await ebayPrice(c.num); } catch (err) { toast('eBay: ' + err.message, 4000); } } showListings(c.num); };
   });
 }
 const daysSince = d => d ? (Date.now() - new Date(d + 'T00:00:00')) / 864e5 : 999;
@@ -797,7 +818,7 @@ function openConfirm({ num = '', ocrName = '', photo = null, readOk = false, gue
         const b = document.createElement('button'); b.className = 'tile'; b.style.cssText = `width:84px;flex:none;outline:${a === artSel ? '3px solid var(--accent)' : 'none'};border-radius:8px;padding:2px`;
         const img = new Image(); img.referrerPolicy = 'no-referrer'; img.style.cssText = 'width:100%;aspect-ratio:63/88;object-fit:cover;border-radius:6px;display:block;background:#222';
         img.src = officialURL(n + (a ? '@' + a : ''));
-        const l = document.createElement('div'); l.className = 'no'; l.style.whiteSpace = 'normal'; l.textContent = lab + (pr ? ` · US$${pr < 100 ? pr.toFixed(2) : Math.round(pr)}` : '');
+        const l = document.createElement('div'); l.className = 'no'; l.style.whiteSpace = 'normal'; l.textContent = lab + (pr ? ` · ${usd(pr)}` : '');
         b.append(img, l); b.onclick = () => { artSel = a; box.querySelectorAll('button').forEach(x => x.style.outline = 'none'); b.style.outline = '3px solid var(--accent)'; setOfficial();
           const r = $('#fRar'); const m = lab.match(/^(LR|R|U|C)\+*/); if (r && m) r.value = m[0]; };
         box.appendChild(b);
@@ -841,12 +862,14 @@ function renderBuilding() {
   const targets = Object.values(S.cores).filter(c => c.status === 'target');
   const buyTotal = Object.entries(needs('target')).reduce((s, [n, q]) => s + Math.max(0, q - ownedByNum(n, true)), 0);
   $('#app').innerHTML = `<div class="top"><div class="row"><h1 class="grow">Decks I'm Building</h1></div>
-    <p class="small muted" style="margin:6px 0 0">Plan the cores you want, including cards you don't own yet. The shopping list works itself out.</p></div>
+    <p class="small muted" style="margin:6px 0 0">Decks you're working towards, using any card in the game. The shopping list works itself out.</p></div>
   <div class="wrap">
-    <div class="row" style="gap:8px"><button class="btn grow" id="newTarget">New target core</button><button class="btn ghost" id="shop">Shopping list${buyTotal ? ` · ${buyTotal}` : ''}</button></div>
+    <button class="btn" id="planBuy" style="width:100%">Plan a deck to buy</button>
+    <div class="row" style="gap:8px;margin-top:8px"><button class="btn ghost grow" id="shop">Shopping list${buyTotal ? ` · ${buyTotal}` : ''}</button><button class="btn ghost sm" id="newTarget">Core by hand</button></div>
     ${targets.length ? targets.map(coreCardHTML).join('') : '<div class="empty"><b>No target cores yet</b>Make one for each 25-card half you’re working towards.</div>'}
   </div>`;
   $('#newTarget').onclick = () => newCore('target');
+  $('#planBuy').onclick = () => openBuilder('wish');
   $('#shop').onclick = () => go('shopping');
   bindActs($('#app'));
 }
@@ -957,21 +980,30 @@ function openPicker(core) {
 
 // ---------- Shopping list ----------
 function renderShopping() {
-  const need = needs('target');
-  const rows = Object.entries(need).map(([num, q]) => ({ num, q, have: playableByNum(num, true), i: info(num), p: priceOf(num) })).map(r => ({ ...r, buy: Math.max(0, r.q - r.have) })).filter(r => r.buy > 0)
-    .sort((a, b) => (COLOURS.indexOf(a.i.colour) - COLOURS.indexOf(b.i.colour)) || a.num.localeCompare(b.num));
-  const total = rows.reduce((s, r) => s + r.buy, 0), priced = rows.filter(r => r.p), est = priced.reduce((s, r) => s + r.buy * r.p.median, 0);
+  const need = needs('target'), forWhat = {};
+  for (const c of Object.values(S.cores)) if (c.status === 'target') { const d = Object.values(S.decks).find(d => d.a === c.id || d.b === c.id), nm = d ? d.name : c.name; for (const e of c.cards) (forWhat[e.num] = forWhat[e.num] || new Set()).add(nm); }
+  const rows = Object.entries(need).map(([num, q]) => ({ num, q, have: playableByNum(num, true), i: info(num), bp: bestPrice(num) })).map(r => ({ ...r, buy: Math.max(0, r.q - r.have) })).filter(r => r.buy > 0);
+  const groups = {}; for (const r of rows) { const g = [...(forWhat[r.num] || ['Other'])].join(' / '); (groups[g] = groups[g] || []).push(r); }
+  const each = r => r.bp ? conv(r.bp[0], r.bp[1]) : null, total = rows.reduce((s, r) => s + r.buy, 0), priced = rows.filter(r => each(r) != null), est = priced.reduce((s, r) => s + r.buy * each(r), 0);
+  const fmt = n => cash(n, CUR()), linked = !!(relayURL() && S.settings.ebayOk);
   $('#app').innerHTML = `<div class="top"><div class="row"><button class="iconbtn" id="back" aria-label="Back"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button><h1 class="grow" style="font-size:20px">Shopping list</h1></div>
-    <div class="stats"><div class="stat"><b>${total}</b><span class="small muted">cards</span></div><div class="stat"><b>${rows.length}</b><span class="small muted">different</span></div><div class="stat"><b>${est ? money(est) : '—'}</b><span class="small muted">${priced.length < rows.length ? `est. (${priced.length}/${rows.length} priced)` : 'estimated'}</span></div></div></div>
-  <div class="wrap">${rows.length ? `<div class="list">${rows.map(r => `<div class="li">
+    <div class="stats"><div class="stat"><b>${total}</b><span class="small muted">cards</span></div><div class="stat"><b>${rows.length}</b><span class="small muted">different</span></div><div class="stat"><b>${est ? fmt(est) : '—'}</b><span class="small muted">${priced.length < rows.length ? `est. (${priced.length}/${rows.length} priced)` : 'estimated'}</span></div></div>
+    ${rows.length ? `<button class="btn ${linked ? '' : 'ghost'}" id="ebAll" style="width:100%">${linked ? 'Check eBay prices for all' : 'Connect eBay to check prices'}</button>` : ''}</div>
+  <div class="wrap">${rows.length ? `${Object.entries(groups).map(([g, L]) => `<h2>${esc(g)} <span class="small muted">${L.reduce((t, r) => t + r.buy, 0)} cards${L.every(r => each(r) != null) ? ' · ' + fmt(L.reduce((t, r) => t + r.buy * each(r), 0)) : ''}</span></h2><div class="list">${L.sort((a, b) => (COLOURS.indexOf(a.i.colour) - COLOURS.indexOf(b.i.colour)) || a.num.localeCompare(b.num)).map(r => `<div class="li">
       <span class="dot" style="background:${colourVar(r.i.colour)}"></span>
-      <div class="grow"><div style="font-weight:600">${esc(r.i.name)}</div><div class="small muted">${esc(r.num)}${r.p ? ` · ${money(r.p.median)} each (eBay sold) · ${fmtDate(r.p.updated)}` : r.i.usd != null ? ` · ~US$${r.i.usd.toFixed(2)} (TCGplayer)` : ' · no price yet'}</div></div>
-      <div style="text-align:right"><span class="pill warn">buy ${r.buy}</span><br><button class="btn ghost sm" data-bought="${esc(r.num)}:${r.buy}" style="margin-top:4px">Bought</button></div></div>`).join('')}</div>
-    <p class="small muted">Prices are card price only, postage not included. "Bought" moves cards to "on the way".</p>
-    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn grow" id="copyS">Copy eBay bulk search</button><a class="btn ghost" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${ebayBuyURL(rows.map(r => r.num))}">Open eBay</a></div>`
-    : '<div class="empty"><b>Nothing to buy</b>Every target core is covered by cards you own or have on the way.</div>'}</div>`;
+      <div class="grow"><div style="font-weight:600">${esc(r.i.name)}</div><div class="small muted">${esc(r.num)} · ${esc(setOf(r.num))}</div>
+        <div class="small">${r.bp ? `${cash(r.bp[0], r.bp[1])} each <span class="muted">· ${esc(r.bp[2])}${ebayLive(r.num) ? ' · ' + fmtDate(S.ebay[r.num].date) : ''}</span>` : '<span class="muted">no price yet</span>'}${S.ebay?.[r.num] && !ebayLive(r.num) ? ' <span class="warn">· none on eBay now</span>' : ''}</div></div>
+      <div style="text-align:right"><span class="pill warn">buy ${r.buy}</span><br>
+        <div class="row" style="gap:4px;margin-top:4px;justify-content:flex-end">${linked ? `<button class="btn ghost sm" data-eb="${esc(r.num)}">eBay</button>` : ''}<button class="btn ghost sm" data-bought="${esc(r.num)}:${r.buy}">Bought</button></div></div></div>`).join('')}</div>`).join('')}
+    <p class="small muted">Prices are card only, postage not included. "Bought" moves cards to "on the way".</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn ghost grow" id="copyS">Copy eBay bulk search</button><a class="btn ghost" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${ebayBuyURL(rows.map(r => r.num))}">Open eBay</a></div>`
+    : '<div class="empty"><b>Nothing to buy</b>Every target deck is covered by cards you own or have on the way.</div>'}</div>`;
   $('#back').onclick = () => go('building');
   const cs = $('#copyS'); if (cs) cs.onclick = () => copyText(searchString(rows.map(r => r.num)));
+  const ea = $('#ebAll'); if (ea) ea.onclick = async () => { if (!linked) { go('more'); return ebaySetupSheet(); }
+    ea.disabled = true; let k = 0, bad = 0; for (const r of rows) { ea.textContent = `Checking ${++k} of ${rows.length}…`; try { await ebayPrice(r.num); } catch (err) { if (++bad >= 3) { toast('eBay: ' + err.message, 5000); break; } } }
+    renderShopping(); toast('eBay prices updated'); };
+  document.querySelectorAll('[data-eb]').forEach(b => b.onclick = async () => { const n = b.dataset.eb; if (!S.ebay?.[n] || daysSince(S.ebay[n].date) >= 1) { b.disabled = true; b.textContent = '…'; try { await ebayPrice(n); } catch (err) { toast('eBay: ' + err.message, 4000); } } showListings(n); });
   document.querySelectorAll('[data-bought]').forEach(b => b.onclick = () => { const [num, n] = b.dataset.bought.split(':'); const k = keyOf(num, false); const c = S.cards[k] || (S.cards[k] = { num, collector: false, owned: 0, incoming: 0, rarity: info(num).rarity, sleeved: false, notes: '' }); c.incoming = (c.incoming || 0) + +n; save(); render(); toast(`${n} × ${info(num).name} on the way`); });
 }
 async function copyText(t) { try { await navigator.clipboard.writeText(t); toast('Copied'); } catch { openSheet(`<h3>Copy this</h3><textarea rows="6" readonly>${esc(t)}</textarea>`); } }
@@ -1004,19 +1036,22 @@ function renderBuild() {
 // ---------- The builder: one panel, all the choices ----------
 const SERIES_CHIPS = ['IBO', 'Seed', 'Destiny', 'Wing', '00', 'Witch', 'Unicorn', '0079', 'Zeta', 'GQuuuuuuX', 'G Generation'];
 const BUILD_DEFAULT = () => ({ meta: true, split: 25, anySplit: false, what: 'core', cols: [], series: [], strict: false, style: 'auto', opp: 'any', include: {}, exclude: [], budget: 0, incoming: !!S.settings.includeIncoming, free: true });
-function openBuilder() {
-  const o = Object.assign(BUILD_DEFAULT(), S.settings.build || {}); let q = '';
+let BMODE = 'build';
+function openBuilder(mode) { // mode 'wish' = Plan a deck to buy (any card in the game); anything else = build from my collection
+  if (mode === 'wish' || mode === 'build') BMODE = mode; const wish = BMODE === 'wish', KEY = wish ? 'wish' : 'build';
+  const o = Object.assign(BUILD_DEFAULT(), wish ? { what: 'deck', budget: '' } : {}, S.settings[KEY] || {}); o.wish = wish; if (wish && o.what === 'every') o.what = 'deck'; let q = '';
   if (o.opp && o.opp !== 'any') { o.vs = { ...(o.vs || {}), [o.oppName || o.opp]: 'strong' }; } o.opp = 'any'; { const ren = { 'Fast aggro': 'Fast', Midrange: 'Mid', 'Control / ramp': 'Control' }, nv = {}; for (const k in (o.vs || {})) { const n = ren[k] || k; if (o.vs[k] === 'strong' && ['Fast', 'Mid', 'Control'].includes(n)) nv[n] = 'strong'; } o.vs = nv; } // older single "Playing against" choice
   const chip = (attr, val, on, label) => `<button class="chip ${on ? 'on' : ''}" data-${attr}="${esc(val)}">${esc(label)}</button>`;
   const cap = t => t[0].toUpperCase() + t.slice(1);
   const draw = () => {
-    S.settings.build = o; save();
+    S.settings[KEY] = o; save();
     const maxCols = o.what === 'deck' ? 2 : o.what === 'every' ? 0 : 1;
     const hits = q.length < 2 ? [] : Object.values(CATALOG).filter(c => !RESOURCE_TYPES.has(c.type) && (c.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q)))
       .sort((a, b) => playableByNum(b.num, true) - playableByNum(a.num, true)).slice(0, 8);
-    $('#sheet').innerHTML = `<div class="row"><h3 class="grow">New build</h3><button class="btn ghost sm" id="bxReset">Reset</button></div>
+    $('#sheet').innerHTML = `<div class="row"><h3 class="grow">${wish ? 'Plan a deck to buy' : 'New build'}</h3><button class="btn ghost sm" id="bxReset">Reset</button></div>
+      ${wish ? '<p class="small muted" style="margin:0 0 4px">Picks from every card in the game. Cards you already own count as free, so they’re used whenever they’re as good.</p>' : ''}
       <label class="f">What</label>
-      <div class="seg">${[['core', '25-card core'], ['deck', '50-card deck'], ['every', 'Core set']].map(([v, l]) => `<button data-what="${v}" class="${o.what === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg">${[['core', '25-card core'], ['deck', '50-card deck'], ...(wish ? [] : [['every', 'Core set']])].map(([v, l]) => `<button data-what="${v}" class="${o.what === v ? 'on' : ''}">${l}</button>`).join('')}</div>
       ${maxCols ? `<label class="f">Colour${maxCols > 1 ? 's (up to 2)' : ''} — none picked = try them all</label>
       <div class="chips" style="flex-wrap:wrap">${COLOURS.map(c => chip('col', c, o.cols.includes(c), cap(c))).join('')}</div>` : ''}
       ${o.what === 'deck' ? `<label class="f">Colour split · <b id="bxSplitTxt"></b></label>
@@ -1042,8 +1077,10 @@ function openBuilder() {
         ${Object.entries(o.include).map(([n, k]) => `<span class="pill ok" style="display:inline-flex;align-items:center;gap:4px">${esc(info(n).name)} <span class="muted">${esc(info(n).num)}</span> ×${k}<button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-incq="${esc(n)}">${k < 4 ? '+' : '1'}</button><button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-unc="${esc(n)}">×</button></span>`).join('')}
         ${o.exclude.map(n => `<span class="pill bad" style="display:inline-flex;align-items:center;gap:4px">No ${esc(info(n).name)}<button class="btn ghost sm" style="padding:0 8px;min-height:28px" data-unx="${esc(n)}">×</button></span>`).join('')}</div>
       ${(() => { const odd = S.settings.odd || {}, n = Object.values(odd).reduce((t, a) => t + a.length, 0); return n ? `<div class="small muted" style="margin-top:8px">${n} card${n === 1 ? '' : 's'} you've marked as odd: ${esc(Object.entries(odd).map(([p, a]) => (p === '_any' ? 'any' : info(p).name) + ': ' + a.map(x => info(x).name).join(', ')).join(' · '))} <button class="btn ghost sm" id="bxOddClr" style="min-height:28px;padding:0 8px">Forget</button></div>` : ''; })()}
-      <label class="f" for="bxBud">Budget for cards you don't own (US$, TCGplayer prices) — 0 = only my cards</label>
-      <input type="number" id="bxBud" inputmode="decimal" min="0" step="5" value="${o.budget || 0}">
+      ${wish ? `<label class="f" for="bxBud">Most you want to spend (${CUR()}) — leave blank for the best deck at any price</label>
+      <input type="number" id="bxBud" inputmode="decimal" min="0" step="5" placeholder="No limit" value="${o.budget || ''}">`
+      : `<label class="f" for="bxBud">Budget for cards you don't own (${CUR()}) — 0 = only my cards</label>
+      <input type="number" id="bxBud" inputmode="decimal" min="0" step="5" value="${o.budget || 0}">`}
       <label class="f"><input type="checkbox" id="bxCol" ${o.collector ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Play my collector copies too (+, alt art)</label>
       <label class="f"><input type="checkbox" id="bxInc" ${o.incoming ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Count cards on the way</label>
       ${o.what !== 'every' ? `<label class="f"><input type="checkbox" id="bxFree" ${o.free ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Don't use cards already in my other cores</label>` : '<p class="small muted">Core set builds as many good cores as your cards allow (up to 3 per colour) that all pair together. It uses your whole collection and replaces your earlier smart cores. Hand-made cores are kept.</p>'}
@@ -1063,7 +1100,7 @@ function openBuilder() {
     sh.querySelectorAll('[data-incq]').forEach(b => b.onclick = () => { const n = b.dataset.incq; o.include[n] = o.include[n] >= 4 ? 1 : o.include[n] + 1; draw(); });
     sh.querySelectorAll('[data-unc]').forEach(b => b.onclick = () => { delete o.include[b.dataset.unc]; draw(); });
     sh.querySelectorAll('[data-unx]').forEach(b => b.onclick = () => { o.exclude = o.exclude.filter(x => x !== b.dataset.unx); draw(); });
-    $('#bxBud').onchange = e => { o.budget = Math.max(0, +e.target.value || 0); save(); };
+    $('#bxBud').onchange = e => { o.budget = e.target.value === '' ? '' : Math.max(0, +e.target.value || 0); save(); };
     $('#bxInc').onchange = e => { o.incoming = e.target.checked; S.settings.includeIncoming = o.incoming; save(); };
     $('#bxCol').onchange = e => { o.collector = e.target.checked; draw(); };
     const fr = $('#bxFree'); if (fr) fr.onchange = e => { o.free = e.target.checked; save(); };
@@ -1074,7 +1111,7 @@ function openBuilder() {
     $('#bxMeta').onchange = e => { o.meta = e.target.checked; save(); };
     $('#bxMetaUp').onclick = async () => { const b = $('#bxMetaUp'); b.disabled = true;
       try { const n = await updateMetaDecks((i, t) => { b.textContent = `${i} / ${t}`; }); toast(`Loaded ${n} winning decks`); } catch { toast('Couldn’t reach Limitless — check your internet', 3500); } draw(); };
-    $('#bxReset').onclick = () => { Object.assign(o, BUILD_DEFAULT()); q = ''; draw(); };
+    $('#bxReset').onclick = () => { Object.assign(o, BUILD_DEFAULT(), wish ? { what: 'deck', budget: '' } : {}); o.wish = wish; q = ''; draw(); };
     $('#bxGo').onclick = () => { $('#bxGo').disabled = true; $('#bxGo').textContent = 'Building…'; setTimeout(() => runBuilder(o), 30); };
   };
   openSheet('', draw);
@@ -1086,7 +1123,7 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
   const themes = seriesFn ? (o.strict ? [seriesFn] : [seriesFn, null]) : [null];
   const tunes = o.style === 'Aggro' ? ['fast'] : o.style === 'Control' ? ['tough'] : o.style === 'Midrange' ? ['power', null] : [null, 'fast', 'tough', 'power'];
   if (o.style === 'auto') for (const st of new Set(vsPicks(o.vs).strong)) if (COUNTER_TUNE[st] && !tunes.includes(COUNTER_TUNE[st])) tunes.push(COUNTER_TUNE[st]); // try builds tuned to beat each ticked type
-  const extra = { include: o.include, exclude: new Set(o.exclude), budget: o.budget, collector: !!o.collector, meta: o.meta !== false && metaStats().n > 0 };
+  const extra = { include: o.include, exclude: new Set(o.exclude), budget: o.wish ? (+o.budget > 0 ? toUSD(+o.budget) : 1e6) : (+o.budget > 0 ? toUSD(+o.budget) : 0), wish: !!o.wish, collector: !!o.collector, meta: o.meta !== false && metaStats().n > 0 };
   const incCols = [...new Set(Object.keys(o.include).map(n => info(n).colour).filter(Boolean))]; // cards you asked for set the colours
   if (incCols.length) { if (o.what === 'core') o = { ...o, cols: incCols.slice(0, 1) }; else o = { ...o, cols: [...new Set([...incCols, ...o.cols])].slice(0, 2) }; }
   if (o.what === 'every') { const so = { themes, tunes, extra, rate: Object.keys(o.vs || {}).length ? m => rateMulti(m, o.vs) : null, incoming: o.incoming }; return showSmartCores(smartCores(o.incoming, false, so), so); }
@@ -1112,7 +1149,7 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
     if (!lead && tune === tunes[0] && tuneB === undefined) for (const l of r.leads.slice(1)) for (const t2 of tunes) { jobs.push([cols, th, t2, l]); if (mix) for (const tb of tunes) if (tb !== t2) jobs.push([cols, th, t2, l, tb]); } // also try each other main pilot
     const sig = sigOf(r.cards); if (seen.has(sig) || (v.avoid && v.avoid.has(sig))) continue; seen.add(sig); r.sig = sig;
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
-    r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + 1.2 * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
+    r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + (o.wish ? 5 : 2.5) * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
   all.sort((a, b) => b.rank - a.rank);
   if (o.free) for (const r of all) { // cards in these colours that your other cores are holding back
     const held = {}; for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) { const i = info(e.num); if (r.colours.includes(i.colour) && !RESOURCE_TYPES.has(i.type)) held[e.num] = (held[e.num] || 0) + e.qty; }
@@ -1154,11 +1191,16 @@ function showOptions(list, size, o, v = {}) {
         const fix = bad.map(([n, st]) => { const t = COUNTER_TUNE[st], M = metaStats(), inDeck = new Set(r.cards.map(e => e.num));
           const c = Object.values(CATALOG).filter(c => cols.includes(c.colour) && !inDeck.has(c.num) && !RESOURCE_TYPES.has(c.type) && c.type !== 'Pilot' && !c.vanilla && !RULES.banned[c.num] && c.usd != null)
             .map(c => [c, tuneScore(c, t) + fx(c).value + 2 * Math.sqrt(M.rate(c.num)) + (r.cards.some(e => info(e.num).type === 'Pilot' && linksTo(c, info(e.num))) ? 1 : 0)]).sort((x, y) => y[1] - x[1]).slice(0, 3);
-          return `<div class="small">To be stronger vs <b>${esc(n)}</b>: ${c.map(([c]) => `${esc(c.name)} <span class="muted">${esc(c.num)} · own ${playableByNum(c.num, true)} · ~US$${c.usd.toFixed(2)}</span>`).join('; ')}</div>`; });
+          return `<div class="small">To be stronger vs <b>${esc(n)}</b>: ${c.map(([c]) => `${esc(c.name)} <span class="muted">${esc(c.num)} · own ${playableByNum(c.num, true)} · ~${usd(c.usd)}</span>`).join('; ')}</div>`; });
         return P.names.length || weakN.length ? `<div class="small" style="margin:4px 0">Your match-ups: ${P.names.map(([n, st]) => `${esc(n)} ${edgeWord(r.m.vs[st])}`).join(' · ')}${weakN.length ? `<span class="muted">${P.names.length ? ' · ' : ''}weak OK vs ${esc(weakN.join(', '))}</span>` : ''}</div>
           ${fix.length ? `<div class="card" style="margin:6px 0;border-color:#7A5326"><div class="small muted">Best your cards can do — ${bad.length === 1 ? 'this match-up stays' : 'these stay'} weak. ${o.budget ? '' : 'Set a budget to let the builder buy fixes, or pick up:'}</div>${fix.join('')}</div>` : ''}` : ''; })()}
       ${o.meta !== false ? metaGuide(r) : ''}
-      ${r.buys.length ? `<div class="card" style="margin:8px 0"><b class="small">To buy · about US$${r.cost.toFixed(2)}</b><div class="small muted">${r.buys.map(b => `${esc(info(b.num).name)} ×${b.need}${b.usd ? ` ($${b.usd.toFixed(2)})` : ''}`).join(' · ')}</div></div>` : '<p class="small ok">All from cards you own.</p>'}
+      ${r.buys.length ? (() => { // buy order: most improvement for the least money first
+        const M = metaStats(), pil = r.cards.filter(e => info(e.num).type === 'Pilot').map(e => info(e.num));
+        const val = b => { const c = info(b.num); return (1 + 3 * Math.sqrt(M.rate(b.num)) + fx(c).value + (pil.some(p => linksTo(c, p)) ? 1 : 0) + (c.type === 'Pilot' ? 1 : 0)) * b.need / Math.max(0.25, (b.usd || 1) * b.need); };
+        let run = 0; const L = r.buys.slice().sort((a, b) => val(b) - val(a)).map(b => { run += (b.usd || 0) * b.need; return [b, run]; });
+        return `<div class="card" style="margin:8px 0"><b class="small">To buy · ${r.buys.reduce((t, b) => t + b.need, 0)} cards · about ${usd(r.cost)}</b> <span class="small muted">· best value first</span>
+          <ol class="small" style="padding-left:20px;margin:6px 0">${L.map(([b, t]) => `<li>${esc(info(b.num).name)} <span class="muted">${esc(b.num)} · ${esc(setOf(b.num))}</span> ×${b.need}${b.usd ? ` · ${usd(b.usd)} each <span class="muted">(running ${usd(t)})</span>` : ''}</li>`).join('')}</ol></div>`; })() : '<p class="small ok">All from cards you own.</p>'}
       ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.slice(0, 4).map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
       <div class="grid" style="margin-top:10px" id="opGrid">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty, need: Math.max(0, e.qty - playableByNum(e.num, o.incoming)), selected: marked.has(e.num) })).join('')}</div>
       ${oddBar(marked, r.cards)}
@@ -1217,8 +1259,8 @@ const SERIES_LIST = () => [...new Set(Object.values(CATALOG).map(c => c.series).
 const linkParts = u => (u.link || '').split(/\s*\/\s*/).map(x => x.trim()).filter(Boolean);
 function linksTo(u, p) {
   if (!u || !p || u.type !== 'Unit') return false;
-  const pn = (p.name || '').toLowerCase(), pt = (p.trait || '').toLowerCase();
-  return linkParts(u).some(l => /trait$/i.test(l) ? pt.includes(l.replace(/\s*trait$/i, '').trim().toLowerCase()) : l.toLowerCase() === pn);
+  const pn = (p.name || '').toLowerCase(), pt = (p.trait || '').toLowerCase(), aka = ((p.text || '').match(/name is also treated as \[([^\]]+)\]/i) || [])[1]?.toLowerCase(); // e.g. Vidar counts as Gaelio Bauduin
+  return linkParts(u).some(l => /trait$/i.test(l) ? pt.includes(l.replace(/\s*trait$/i, '').trim().toLowerCase()) : l.toLowerCase() === pn || l.toLowerCase() === aka);
 }
 const jitter = (num, seed) => { let h = seed | 0; for (const ch of num) h = Math.imul(h ^ ch.charCodeAt(0), 2654435761); return ((h >>> 0) % 1000) / 1000 * 1.4 - 0.7; };
 // ---- Reading card effects (catalog.json has each card's effect text since v1.23) ----
@@ -1255,10 +1297,10 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
     if (c.type === 'Unit' && c.cost != null && c.ap != null) s += Math.max(-1, Math.min(1, ((c.ap + c.hp) / Math.max(1, c.cost) - 3) / 2)); // stats for the cost
     if (c.lv == null && c.type === 'Unit') s -= 0.3;
     s += 0.8 * fx(c).value;                                                     // what the card actually does
-    if (budget && c.own < 4 && !inc[c.num]) s -= c.own === 0 ? 0.9 : 0.3;     // cards you'd have to buy only win when they're clearly better
+    if (budget && c.own < 4 && !inc[c.num]) s -= opts.wish ? (c.own === 0 ? 0.25 : 0.1) : (c.own === 0 ? 0.9 : 0.3);     // cards you'd have to buy only win when they're clearly better
     if (opts.fav && opts.fav(c)) s += 0.6;
     if (opts.seed) s += jitter(c.num, opts.seed);
-    if (opts.meta) s += 1.5 * Math.sqrt(metaStats().rate(c.num));             // a card winners keep playing                              // "Try another": nudges scores so a different, still-good build comes out                                     // your favourite series get the nod when it's close
+    if (opts.meta) s += (opts.wish ? 2.5 : 1.5) * Math.sqrt(metaStats().rate(c.num));             // a card winners keep playing                              // "Try another": nudges scores so a different, still-good build comes out                                     // your favourite series get the nod when it's close
     if (opts.tune) s += tuneScore(c, opts.tune);
     if (c.vanilla && !inc[c.num]) s -= size <= 25 ? 0.6 : 0.4;                      // a plain 2/2 blocks pairing with any other core that has one
     return s;
@@ -1434,7 +1476,7 @@ function metaGuide(r) { // what the winning decks say about this build
     .map(c => [c, Math.max(0, ...pilots.map(p => M.given(p, c.num)))]).filter(x => x[1] >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 4);
   return `<div class="card" style="margin:8px 0"><b class="small">Tournament guide</b> <span class="small muted">· ${M.n} winning decks</span>
     <div class="small muted">${inMeta} of ${copies} cards here also show up in winning decks.</div>
-    ${tips.length ? `<div class="small">Winners with these pilots also play: ${tips.map(([c, g]) => `<b>${esc(c.name)}</b> <span class="muted">${esc(c.num)} · ${Math.round(g * 100)}% · own ${playableByNum(c.num, true)}${c.usd ? ` · ~US$${c.usd.toFixed(2)}` : ''}</span>`).join('; ')}</div>` : ''}</div>`;
+    ${tips.length ? `<div class="small">Winners with these pilots also play: ${tips.map(([c, g]) => `<b>${esc(c.name)}</b> <span class="muted">${esc(c.num)} · ${Math.round(g * 100)}% · own ${playableByNum(c.num, true)}${c.usd ? ` · ~${usd(c.usd)}` : ''}</span>`).join('; ')}</div>` : ''}</div>`;
 }
 /* =========================== SMART BUILDER =========================== */
 // The card list has no effect text, so "smart" means: stats for the level, pilot links, faction, 4-ofs, deck shape,
@@ -1690,7 +1732,7 @@ function showDeckSuggestion(r) {
     <p class="small ${chk.errors.length ? 'warn' : 'ok'}">${chk.errors.length ? chk.errors.map(esc).join('<br>') : 'Legal deck — passes the rules and ban list'}</p>
     ${profileLine(r.cards)}${shapeLine(r.cards, 50)}
     ${r.upgrades && r.upgrades.length ? `<details style="margin:8px 0"><summary class="small"><b>${r.offFaction ? r.offFaction + ' cards here don’t fit the deck’s pilots or faction.' : 'Want it stronger?'} Best cards to buy</b></summary>
-      <ul class="small muted" style="padding-left:18px;margin:6px 0">${r.upgrades.map(u => `<li><b>${esc(u.name)}</b> ${esc(u.num)} ×${u.need}${u.usd ? ` · about US$${u.usd < 10 ? u.usd.toFixed(2) : Math.round(u.usd)} each` : ''} — ${esc(u.why)}</li>`).join('')}</ul></details>` : ''}
+      <ul class="small muted" style="padding-left:18px;margin:6px 0">${r.upgrades.map(u => `<li><b>${esc(u.name)}</b> ${esc(u.num)} ×${u.need}${u.usd ? ` · about ${usd(u.usd)} each` : ''} — ${esc(u.why)}</li>`).join('')}</ul></details>` : ''}
     ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join('')}</div>
     <label class="f" for="dn">Deck name</label><input type="text" id="dn" value="${esc(name)} deck">
@@ -1714,7 +1756,7 @@ function showSuggestion(r) {
     <p class="small">Strength: <b class="${r.strength === 'Strong' ? 'ok' : 'warn'}">${r.strength}</b> <span class="muted">· ${r.linkedCopies} of ${r.unitCopies} units link with its pilots · built from ${r.poolSize} available ${r.colour} cards</span></p>
     ${profileLine(r.cards)}${shapeLine(r.cards, 25)}
     ${r.upgrades && r.upgrades.length ? `<details style="margin:8px 0"><summary class="small"><b>${r.offFaction ? r.offFaction + ' cards here don’t fit the deck’s pilots or faction.' : 'Want it stronger?'} Best cards to buy</b></summary>
-      <ul class="small muted" style="padding-left:18px;margin:6px 0">${r.upgrades.map(u => `<li><b>${esc(u.name)}</b> ${esc(u.num)} ×${u.need}${u.usd ? ` · about US$${u.usd < 10 ? u.usd.toFixed(2) : Math.round(u.usd)} each` : ''} — ${esc(u.why)}</li>`).join('')}</ul></details>` : ''}
+      <ul class="small muted" style="padding-left:18px;margin:6px 0">${r.upgrades.map(u => `<li><b>${esc(u.name)}</b> ${esc(u.num)} ×${u.need}${u.usd ? ` · about ${usd(u.usd)} each` : ''} — ${esc(u.why)}</li>`).join('')}</ul></details>` : ''}
     ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <div class="grid" style="margin-top:10px">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty })).join('')}</div>
     <label class="f" for="sn">Name</label><input type="text" id="sn" value="${esc(r.colour[0].toUpperCase() + r.colour.slice(1))} core">
@@ -1869,7 +1911,67 @@ function showSoldCheck(rows, num) {
   });
 }
 
-/* =========================== MORE =========================== */
+// ---------- eBay prices through your relay (see Settings → eBay) ----------
+// Searches current Buy It Now listings on eBay Australia by card number, skips collector / Japanese / graded / sealed listings,
+// splits playsets into a price each, and saves the cheapest and a typical price for each card (postage not included).
+const relayURL = () => (S.settings.ebayRelay || '').trim().replace(/\/+$/, '');
+const setOf = num => { const s = (info(num).set || num.slice(0, 4)).replace(/[_-].*$/, ''); return /^ST/.test(s) ? `${s} starter deck` : /^PR|GCG-PR/.test(s) ? 'promo' : `${s} booster`; };
+async function ebayPing() { const r = await fetch(relayURL() + '/ping'); const j = await r.json(); if (!j.ok) throw new Error(j.error || 'No reply'); return true; }
+async function ebayPrice(num) {
+  const r = await fetch(`${relayURL()}/search?q=${encodeURIComponent(num)}&market=EBAY_AU`), j = await r.json();
+  if (j.error) throw new Error(j.error);
+  const want = num.replace('-', ''), rows = [];
+  for (const it of j.items || []) {
+    const t = it.title || '', flat = t.toUpperCase().replace(/[\s\-–_]/g, '');
+    if (!flat.includes(want) || EXCLUDE.test(t) || /\b(LR|R|U|C)\s?\+|\bfoil\b|holo|parallel/i.test(t) || it.price == null) continue;
+    const nums = (t.toUpperCase().match(/(GD|ST|EB)\s?\d{2}\s?-?\s?\d{3}/g) || []).map(normNum); if (new Set(nums).size > 1) continue; // lots of different cards
+    let qty = 1; const q = t.match(/(?:\bx\s?([2-9])\b|\b([2-9])\s?x\b|playset)/i); if (q) qty = q[1] ? +q[1] : q[2] ? +q[2] : 4;
+    rows.push({ ...it, qty, each: Math.round(it.price / qty * 100) / 100 });
+  }
+  rows.sort((a, b) => a.each - b.each);
+  const v = rows.slice(0, 10).map(x => x.each), p = rows.length ? { low: v[0], typ: median(v), n: rows.length, cur: (rows[0].cur || 'AUD'), date: today(), top: rows.slice(0, 6) } : { low: null, n: 0, date: today(), top: [] };
+  S.ebay = S.ebay || {}; S.ebay[num] = p; save(); return p;
+}
+const ebayLive = num => S.ebay && S.ebay[num] && S.ebay[num].low != null ? S.ebay[num] : null;
+function bestPrice(num) { // [amount, currency, label] — live eBay, then sold screenshots, then TCGplayer
+  const e = ebayLive(num); if (e) return [e.typ, e.cur, `eBay now from ${cash(e.low, e.cur)}`];
+  const p = priceOf(num); if (p) return [p.median, 'AUD', 'eBay sold'];
+  const u = info(num).usd; if (u != null) return [u, 'USD', 'TCGplayer'];
+  return null;
+}
+function showListings(num) {
+  const e = S.ebay && S.ebay[num], i = info(num);
+  openSheet(`<h3>${esc(i.name)} <span class="small muted">${esc(num)}</span></h3>
+    <p class="small muted">${e ? `${e.n} matching Buy It Now listing${e.n === 1 ? '' : 's'} on eBay Australia · checked ${fmtDate(e.date)} · postage not included` : 'Not searched yet'}</p>
+    <div class="list">${(e?.top || []).map(x => `<a class="li" href="${esc(x.url)}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
+      ${x.img ? `<img src="${esc(x.img)}" referrerpolicy="no-referrer" style="width:48px;height:48px;object-fit:cover;border-radius:6px" alt="">` : ''}
+      <div class="grow small"><div>${esc(x.title)}</div><div class="muted">${x.qty > 1 ? `${cash(x.price, x.cur)} for ${x.qty} · ` : ''}${x.ship != null ? (x.ship ? '+ ' + cash(x.ship, x.cur) + ' post' : 'free post') : ''}${x.from && x.from !== 'AU' ? ' · ships from ' + esc(x.from) : ''}</div></div>
+      <b>${cash(x.each, x.cur)}</b></a>`).join('') || '<p class="small muted">No matching listings right now.</p>'}</div>
+    <div class="row" style="gap:8px;margin-top:12px"><button class="btn grow" id="lsAgain">Search again</button><a class="btn ghost" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${ebayBuyURL([num])}">Open eBay</a></div>`, () => {
+    $('#lsAgain').onclick = async () => { $('#lsAgain').disabled = true; $('#lsAgain').textContent = 'Searching…'; try { await ebayPrice(num); showListings(num); } catch (err) { toast('eBay: ' + err.message, 4000); $('#lsAgain').disabled = false; $('#lsAgain').textContent = 'Search again'; } };
+  });
+}
+function ebaySetupSheet() {
+  openSheet(`<h3>Connect eBay — one-time setup</h3>
+    <p class="small muted">About 15 minutes, all in your phone's browser. You make free eBay developer keys, then a free Cloudflare "relay" that keeps those keys private and lets this app search eBay. Your own eBay login isn't needed.</p>
+    <h2>1 · eBay keys</h2>
+    <ol class="small" style="padding-left:18px;margin:0">
+      <li>Go to <b>developer.ebay.com</b> → <b>Register</b> (free) and sign in.</li>
+      <li>Open <b>Application Keysets</b> (from your name at the top). Give the app a name, e.g. <i>MyCards</i>.</li>
+      <li>Under <b>Production</b>, tap <b>Create a keyset</b>. If eBay asks about <i>marketplace account deletion notifications</i>, choose the option that you're exempt because you don't store eBay user data.</li>
+      <li>Keep the page open — you'll copy the Production <b>App ID (Client ID)</b> and <b>Cert ID (Client Secret)</b>.</li></ol>
+    <h2>2 · Cloudflare relay</h2>
+    <ol class="small" style="padding-left:18px;margin:0">
+      <li>Go to <b>dash.cloudflare.com</b> → sign up (free).</li>
+      <li><b>Workers &amp; Pages</b> → <b>Create</b> → <b>Create Worker</b> → name it <i>gtcg-ebay</i> → <b>Deploy</b>.</li>
+      <li><b>Edit code</b> → select all and delete → paste the whole <b>ebay-relay.js</b> file Claude sent → <b>Deploy</b>.</li>
+      <li>Back on the worker: <b>Settings</b> → <b>Variables and Secrets</b> → <b>Add</b>:<br><code>EBAY_CLIENT_ID</code> = App ID<br><code>EBAY_CLIENT_SECRET</code> = Cert ID (type <b>Secret</b>) → <b>Deploy</b>.</li>
+      <li>Copy the worker's address — it looks like <i>https://gtcg-ebay.yourname.workers.dev</i>.</li></ol>
+    <h2>3 · This app</h2>
+    <p class="small">Settings → eBay → paste the address → <b>Test</b>. "Connected ✓" means it's working.</p>
+    <button class="btn" id="esDone" style="width:100%;margin-top:12px">Got it</button>`, () => { $('#esDone').onclick = closeSheet; });
+}
+/* =========================== SETTINGS (was More) =========================== */
 function renderMore() {
   const inCores = {}; for (const c of Object.values(S.cores)) for (const e of c.cards) inCores[e.num] = Math.max(inCores[e.num] || 0, 0) + e.qty;
   const dsCount = Object.values(inCores).reduce((s, n) => s + n, 0);
@@ -1878,7 +1980,21 @@ function renderMore() {
     .sort((a, b) => ((b.c.price?.median || 0) * b.spare) - ((a.c.price?.median || 0) * a.spare));
   const spareVal = spares.reduce((s, x) => s + (x.c.price ? x.c.price.median * x.spare : 0), 0);
   const notSleeved = Object.values(S.cards).filter(c => inCores[c.num] && !c.sleeved && !c.collector).length;
-  $('#app').innerHTML = `<div class="top"><h1>More</h1></div><div class="wrap">
+  $('#app').innerHTML = `<div class="top"><h1>Settings</h1></div><div class="wrap">
+    <h2>Currency</h2>
+    <select id="stCur">${CURRENCIES.map(([c, n]) => `<option value="${c}" ${CUR() === c ? 'selected' : ''}>${c} — ${n}</option>`).join('')}</select>
+    <p class="small muted" style="margin:4px 0 0">${S.fx ? `Exchange rates from ${fmtDate(S.fx.date)}` : 'Exchange rates not downloaded yet'}${CUR() !== 'USD' && S.fx ? ` · US$1 = ${cash(1, 'USD')}` : ''} · prices are card only, postage not included.</p>
+    <h2>eBay</h2>
+    <p class="small ${relayURL() ? (S.settings.ebayOk ? 'ok' : 'warn') : 'muted'}" style="margin:0 0 6px">${relayURL() ? (S.settings.ebayOk ? 'Connected ✓ — searches eBay Australia for the cards on your shopping list' : 'Address saved — tap Test') : 'Not connected. Connect it to look up current eBay prices for the cards you need.'}</p>
+    <label class="f" for="stRelay">Relay address</label>
+    <input type="text" id="stRelay" inputmode="url" placeholder="https://gtcg-ebay.yourname.workers.dev" value="${esc(S.settings.ebayRelay || '')}">
+    <div class="row" style="gap:8px;margin-top:8px"><button class="btn grow" id="stTest">Test</button><button class="btn ghost grow" id="stHow">How to set up</button></div>
+    <h2>Card pictures &amp; photos</h2>
+    <label class="f"><input type="checkbox" id="stOff" ${S.settings.officialImages ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show card pictures (from TCGplayer; each one is saved on this phone the first time it shows, so they work offline after)</label>
+    <label class="f"><input type="checkbox" id="stKeep" ${S.settings.keepPhotos ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Keep my own scan photos (off = scans are only used to read the card, then thrown away)</label>
+    ${Object.values(S.cards).some(c => c.photo) ? '<button class="btn ghost sm" id="stDelPh" style="margin-top:6px">Remove my photos (use card pictures instead)</button>' : ''}
+    <label class="f" for="stQ">Photo quality (only if keeping your photos)</label>
+    <select id="stQ"><option value="low" ${S.settings.quality === 'low' ? 'selected' : ''}>Low (~20 KB a card)</option><option value="medium" ${S.settings.quality === 'medium' ? 'selected' : ''}>Medium (~60 KB)</option><option value="high" ${S.settings.quality === 'high' ? 'selected' : ''}>High (~150 KB)</option></select>
     <h2>Sleeves</h2>
     <div class="stats"><div class="stat"><b>${dsCount}</b><span class="small muted">double sleeve (all core cards)</span></div><div class="stat"><b>${coll.reduce((s, c) => s + c.owned, 0)}</b><span class="small muted">toploader (collector)</span></div><div class="stat"><b class="${notSleeved ? 'warn' : ''}">${notSleeved}</b><span class="small muted">core cards not marked sleeved</span></div></div>
     <p class="small muted">Every card in a deck needs identical sleeves, and your cores swap between decks, so use the same inner and outer sleeves on all core cards. Collector cards stay out of play.</p>
@@ -1892,21 +2008,20 @@ function renderMore() {
     <h2>Backup</h2>
     <p class="small muted">Saves everything (cards, cores, decks, prices and your photos) as one file. Share it to Gmail to email it to yourself.</p>
     <div class="row" style="gap:8px"><button class="btn grow" id="bk">Back up now</button><label class="btn ghost" style="display:inline-flex;align-items:center">Restore<input type="file" accept=".json,application/json" id="rs" hidden></label></div>
-    <h2>Settings</h2>
-    <label class="f"><input type="checkbox" id="stOff" ${S.settings.officialImages ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Show card pictures (from TCGplayer; each one is saved on this phone the first time it shows, so they work offline after)</label>
-    <label class="f"><input type="checkbox" id="stKeep" ${S.settings.keepPhotos ? 'checked' : ''} style="width:20px;height:20px;vertical-align:middle;accent-color:var(--accent)"> Keep my own scan photos (off = scans are only used to read the card, then thrown away)</label>
-    ${Object.values(S.cards).some(c => c.photo) ? '<button class="btn ghost sm" id="stDelPh" style="margin-top:6px">Remove my photos (use card pictures instead)</button>' : ''}
-    <label class="f" for="stQ">Photo quality (only if keeping your photos)</label>
-    <select id="stQ"><option value="low" ${S.settings.quality === 'low' ? 'selected' : ''}>Low (~20 KB a card)</option><option value="medium" ${S.settings.quality === 'medium' ? 'selected' : ''}>Medium (~60 KB)</option><option value="high" ${S.settings.quality === 'high' ? 'selected' : ''}>High (~150 KB)</option></select>
     <h2>Card list</h2>
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.33 (fairer match-ups) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.34 (currency, eBay prices, plan a deck to buy) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
   $('#stOff').onchange = e => { S.settings.officialImages = e.target.checked; save(); };
+  $('#stCur').onchange = async e => { S.settings.currency = e.target.value; save(); await loadFx(); renderMore(); toast('Prices now shown in ' + CUR()); };
+  $('#stRelay').onchange = e => { S.settings.ebayRelay = e.target.value.trim(); S.settings.ebayOk = false; save(); renderMore(); };
+  $('#stHow').onclick = ebaySetupSheet;
+  $('#stTest').onclick = async () => { const b = $('#stTest'); S.settings.ebayRelay = $('#stRelay').value.trim(); save(); if (!relayURL()) return ebaySetupSheet();
+    b.disabled = true; b.textContent = 'Testing…'; try { await ebayPing(); S.settings.ebayOk = true; save(); toast('eBay connected ✓'); } catch (err) { S.settings.ebayOk = false; save(); toast('Not working: ' + (err.message || 'no reply — check the address'), 5000); } renderMore(); };
   $('#stQ').onchange = e => { S.settings.quality = e.target.value; save(); };
   $('#stKeep').onchange = e => { S.settings.keepPhotos = e.target.checked; save(); };
   const dp = $('#stDelPh'); if (dp) dp.onclick = async () => { Object.values(S.cards).forEach(c => delete c.photo); save(); await tidyPhotos(); renderMore(); toast('Photos removed — showing card pictures'); };
@@ -1956,12 +2071,12 @@ async function exportPDF({ inc, res, val, colour }) {
   const tot = rows.reduce((t, c) => t + (c.owned || 0), 0), totIn = rows.reduce((t, c) => t + (c.incoming || 0), 0), totVal = rows.reduce((t, c) => t + price(c) * ((c.owned || 0) + (inc ? c.incoming || 0 : 0)), 0);
   doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.text('GTCG My Card Collection', 14, 16);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
-  doc.text(`${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })} · ${tot} cards owned${inc && totIn ? ` · ${totIn} on the way` : ''} · ${rows.length} entries${colour ? ' · ' + cap(colour) + ' only' : ''}${val && totVal ? ` · rough value US$${Math.round(totVal)}` : ''}`, 14, 22);
-  const head = [['Number', 'Name', 'Type', 'Lv', 'Version', 'Own', ...(inc ? ['Coming'] : []), 'Sleeve', ...(val ? ['US$ ea'] : [])]];
+  doc.text(`${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })} · ${tot} cards owned${inc && totIn ? ` · ${totIn} on the way` : ''} · ${rows.length} entries${colour ? ' · ' + cap(colour) + ' only' : ''}${val && totVal ? ` · rough value ${usd(totVal)}` : ''}`, 14, 22);
+  const head = [['Number', 'Name', 'Type', 'Lv', 'Version', 'Own', ...(inc ? ['Coming'] : []), 'Sleeve', ...(val ? [CUR() + ' ea'] : [])]];
   const body = []; let lastCol = null;
   for (const c of rows) { const i = info(c.num);
     if ((i.colour || '') !== lastCol) { lastCol = i.colour || ''; body.push([{ content: cap(lastCol), colSpan: head[0].length, styles: { fontStyle: 'bold', fillColor: [235, 230, 245] } }]); }
-    body.push([c.num, i.name || '', i.type || '', i.lv ?? '', ver(c), c.owned || 0, ...(inc ? [c.incoming || ''] : []), sl(c), ...(val ? [price(c) ? price(c).toFixed(2) : ''] : [])]); }
+    body.push([c.num, i.name || '', i.type || '', i.lv ?? '', ver(c), c.owned || 0, ...(inc ? [c.incoming || ''] : []), sl(c), ...(val ? [price(c) ? (conv(price(c)) ?? price(c)).toFixed(2) : ''] : [])]); }
   doc.autoTable({ head, body, startY: 27, styles: { fontSize: 8.5, cellPadding: 1.4 }, headStyles: { fillColor: [80, 60, 140] }, columnStyles: { 1: { cellWidth: 62 } },
     didDrawPage: d => { doc.setFontSize(8); doc.setTextColor(140); doc.text(`Page ${doc.internal.getNumberOfPages()}`, 196, 290, { align: 'right' }); doc.setTextColor(0); } });
   await shareOrDownload(doc.output('blob'), `my-gundam-cards-${new Date().toISOString().slice(0, 10)}.pdf`, 'My Gundam card collection');
@@ -2238,7 +2353,7 @@ function liveReview(openPick = -1) {
   catch { toast('Storage unavailable — changes won’t be kept', 4000); }
   // Not keeping your own photos: swap any old scan photos for the card pictures
   if (!S.settings.keepPhotos && Object.values(S.cards).some(c => c.photo)) { Object.values(S.cards).forEach(c => delete c.photo); await DB.put('kv', 'state', S).catch(() => {}); }
-  await loadSeed(); rebuildCatalog(); await loadMetaDecks(); render(); handleShared(); tidyPhotos();
+  await loadSeed(); rebuildCatalog(); await loadMetaDecks(); await loadFx(); render(); handleShared(); tidyPhotos();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => { });
