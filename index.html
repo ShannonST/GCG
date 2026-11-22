@@ -1149,7 +1149,9 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
     if (!lead && tune === tunes[0] && tuneB === undefined) for (const l of r.leads.slice(1)) for (const t2 of tunes) { jobs.push([cols, th, t2, l]); if (mix) for (const tb of tunes) if (tb !== t2) jobs.push([cols, th, t2, l, tb]); } // also try each other main pilot
     const sig = sigOf(r.cards); if (seen.has(sig) || (v.avoid && v.avoid.has(sig))) continue; seen.add(sig); r.sig = sig;
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
-    r.colours = cols; r.m = m; r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + (o.wish ? 5 : 2.5) * sShare + (styleOk(m) ? 3 : 0); all.push(r); }
+    r.colours = cols; r.m = m; const pilots = r.cards.filter(e => info(e.num).type === 'Pilot').map(e => e.num), M = metaStats(); // share of copies that winners with these pilots also play
+    r.fit = extra.meta && pilots.length ? r.cards.filter(e => e.num && (pilots.includes(e.num) || Math.max(0, ...pilots.map(p => M.given(p, e.num))) >= 0.1)).reduce((t, e) => t + e.qty, 0) / r.n : 0;
+    r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + 2 * sShare + (o.wish ? 8 : 4) * r.fit + (styleOk(m) ? 3 : 0); all.push(r); }
   all.sort((a, b) => b.rank - a.rank);
   if (o.free) for (const r of all) { // cards in these colours that your other cores are holding back
     const held = {}; for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) { const i = info(e.num); if (r.colours.includes(i.colour) && !RESOURCE_TYPES.has(i.type)) held[e.num] = (held[e.num] || 0) + e.qty; }
@@ -1374,6 +1376,15 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
   for (const num of Object.keys(picked)) { const p = info(num); if (p.type !== 'Pilot' || inc[num]) continue;
     if (!Object.keys(picked).some(u => linksTo(info(u), p))) { left[num] += picked[num]; delete picked[num]; const i = chosen.findIndex(c => c.num === num); if (i >= 0) chosen.splice(i, 1); } }
   fill();
+  if (size >= 25) for (const [num, q] of Object.entries(picked)) { // a lone single copy is rarely drawn — top up a card already in instead
+    if (q !== 1 || inc[num]) continue; const me = info(num);
+    const alt = Object.keys(picked).filter(n => n !== num && picked[n] < 4 && left[n] > 0 && (RULES.restricted[n] || 4) > picked[n] + (otherQty[n] || 0) && !info(n).vanilla && (info(n).type === me.type || info(n).type !== 'Pilot'))
+      .sort((a, b) => (info(b).type === me.type) - (info(a).type === me.type) || score(info(b)) - score(info(a)))[0];
+    if (!alt) { // everything else is at 4: make this a 2-of by trimming the weakest 4-of instead
+      const cut = Object.keys(picked).filter(n => n !== num && picked[n] >= 4 && !inc[n] && info(n).type !== 'Pilot').sort((a, b) => score(info(a)) - score(info(b)))[0];
+      if (cut && left[num] > 0 && (otherQty[num] || 0) + 2 <= 4 && score(me) > score(info(cut)) - 2) { picked[cut]--; left[cut]++; picked[num]++; left[num]--; } continue; }
+    delete picked[num]; left[num] += 1; picked[alt]++; left[alt]--;
+    if (me.type === 'Pilot') { const i = chosen.findIndex(c => c.num === num); if (i >= 0) chosen.splice(i, 1); } }
   if (!chosen.length && pilotsAll.length) notes.push('None of your pilots in these colours link with your units — no pilots added');
   // banned pairs inside the core
   for (const [x, y] of RULES.bannedPairs) if (picked[x] && picked[y]) { const drop = score(info(x)) < score(info(y)) ? x : y; delete picked[drop]; notes.push(`Removed ${info(drop).name} (banned with ${info(drop === x ? y : x).name})`); }
@@ -2012,7 +2023,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.34 (currency, eBay prices, plan a deck to buy) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.35 (proven-card builds) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
