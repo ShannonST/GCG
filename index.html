@@ -1162,12 +1162,13 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
     for (const r of top) {
       const own = {}; for (const p of r.pool || []) own[p.num] = p.own;
       const q = polish(r, { include: o.include, budget: o.wish || +o.budget > 0 ? extra.budget : 0, fixedColours: size === 50 && !o.anySplit && r.colours.length === 2, fav, tune: r.tune, meta: extra.meta, seed: v.seed, own, wish: o.wish, oddFor });
-      q.n = q.cards.reduce((t, e) => t + e.qty, 0); q.sig = sigOf(q.cards); if (seen2.has(q.sig)) continue; seen2.add(q.sig);
+      q.n = q.cards.reduce((t, e) => t + e.qty, 0); q.sig = sigOf(q.cards); if (seen2.has(q.sig) || !rulesOK(q.cards)) continue; seen2.add(q.sig);
       q.m = deckProfile(q.cards); const sShare = seriesFn ? q.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / q.n : 0;
       q.proven = extra.meta ? provenMatch(q.cards) : null;
       q.rank = (q.n === size ? 100 : q.n) + rateMulti(q.m, o.vs) + 2 * sShare + 6 * (q.brain / q.n) + (styleOk(q.m) ? 3 : 0) + (extra.meta ? 6 * (q.proven ? q.proven.sim : 0) : 0);
       done.push(q); }
     if (done.length) { all.length = 0; all.push(...done.sort((a, b) => b.rank - a.rank)); } }
+  for (let k = all.length - 1; k >= 0; k--) if (!rulesOK(all[k].cards)) all.splice(k, 1);
   if (o.free) for (const r of all) { // cards in these colours that your other cores are holding back
     const held = {}; for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) { const i = info(e.num); if (r.colours.includes(i.colour) && !RESOURCE_TYPES.has(i.type)) held[e.num] = (held[e.num] || 0) + e.qty; }
     r.held = Object.keys(held).sort((a, b) => (RAR_SCORE[info(b).rarity] || 2) + fx(info(b)).value + (info(b).type === 'Pilot' || info(b).type === 'Base' ? 1 : 0) - (RAR_SCORE[info(a).rarity] || 2) - fx(info(a)).value - (info(a).type === 'Pilot' || info(a).type === 'Base' ? 1 : 0)); }
@@ -1387,6 +1388,12 @@ function deckScore(qty, ctx) {
   return tot - 0.9 * pen - 1.2 * ones - 0.35 * twos;
 }
 // swap copies until no swap improves the deck — keeps every rule, the colour split, your must-haves and the budget
+function rulesOK(cards, other = []) { // the deck-building rules that don't depend on size
+  const q = {}; for (const e of [...cards, ...other]) q[e.num] = (q[e.num] || 0) + e.qty;
+  if (Object.entries(q).some(([n, k]) => k > Math.min(4, RULES.restricted[n] || 4) || RULES.banned[n])) return false;
+  if (Object.keys(q).filter(n => info(n).vanilla).length > 1) return false;
+  if (RULES.bannedPairs.some(([a, b]) => q[a] && q[b])) return false;
+  return true; }
 function polish(r, ctx) {
   const pool = {}; for (const p of r.pool || []) pool[p.num] = p;
   const qty = {}; for (const e of r.cards) qty[e.num] = e.qty; if (!Object.keys(pool).length) return r;
@@ -1396,7 +1403,7 @@ function polish(r, ctx) {
   const legalSwap = (x, y) => { // removing one x, adding one y
     if ((qty[y] || 0) + 1 > cap(y) || (inc[x] && qty[x] - 1 < inc[x])) return false;
     if (ctx.fixedColours && info(x).colour !== info(y).colour) return false;
-    if (info(y).vanilla && !qty[y] && Object.keys(qty).some(n => qty[n] && n !== x && info(n).vanilla)) return false;
+    if (info(y).vanilla && !qty[y] && Object.keys(qty).some(n => info(n).vanilla && (n === x ? qty[n] > 1 : qty[n] > 0))) return false; // only one plain 2/2 number per deck
     if (RULES.bannedPairs.some(([a, b]) => (y === a && qty[b]) || (y === b && qty[a]))) return false;
     return true; };
   const st = n => { const c = info(n); return fx(c).value + (c.type === 'Unit' && c.ap != null ? ((c.ap + c.hp) - 2 * expStat(c.lv)) / 3 : 0) + (c.link ? 0.3 : 0) + study(c).traits.length * 0.1; };
@@ -1414,6 +1421,7 @@ function polish(r, ctx) {
     if (!improved) break; }
   const cards = Object.entries(qty).filter(([, q]) => q > 0).map(([num, q]) => ({ num, qty: q })).sort(sortByCurve);
   const buys = cards.map(e => ({ num: e.num, need: Math.max(0, e.qty - (pool[e.num]?.own ?? 0)), usd: info(e.num).usd })).filter(b => b.need > 0);
+  if (!rulesOK(cards)) return r; // never hand back a deck that breaks a rule
   const out = { ...r, cards, buys, cost: buys.reduce((t, b) => t + b.need * (b.usd || 0), 0), brain: best, swaps: moves, notes: (r.notes || []).filter(n => /^Only \d+ cards|short/i.test(n)) };
   if (r.halves) out.halves = r.colour.map(col => cards.filter(e => info(e.num).colour === col));
   return out;
@@ -2224,7 +2232,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.38 (card study builder) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.39 (plain 2/2 fix) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
