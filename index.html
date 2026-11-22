@@ -1024,7 +1024,7 @@ function renderBuild() {
     <div class="row" style="gap:8px;margin-top:16px"><button class="btn ghost sm grow" id="bHand">Make a core by hand</button><button class="btn ghost sm grow" id="bPair" ${Object.keys(S.cores).length < 2 ? 'disabled' : ''}>Pair two cores by hand</button></div>
     ${cores.length ? '<button class="btn ghost sm" id="bPdf" style="width:100%;margin-top:8px">Cores report (PDF)</button>' : ''}
   </div>`;
-  $('#bOpen').onclick = openBuilder;
+  $('#bOpen').onclick = () => openBuilder('build');
   $('#bFind').onclick = openDeckFinder;
   $('#bHand').onclick = () => newCore('built');
   $('#bPair').onclick = pairCores;
@@ -1035,11 +1035,12 @@ function renderBuild() {
 
 // ---------- The builder: one panel, all the choices ----------
 const SERIES_CHIPS = ['IBO', 'Seed', 'Destiny', 'Wing', '00', 'Witch', 'Unicorn', '0079', 'Zeta', 'GQuuuuuuX', 'G Generation'];
-const BUILD_DEFAULT = () => ({ meta: true, split: 25, anySplit: false, what: 'core', cols: [], series: [], strict: false, style: 'auto', opp: 'any', include: {}, exclude: [], budget: 0, incoming: !!S.settings.includeIncoming, free: true });
+const BUILD_DEFAULT = () => ({ meta: false, metaV2: true, split: 25, anySplit: false, what: 'core', cols: [], series: [], strict: false, style: 'auto', opp: 'any', include: {}, exclude: [], budget: 0, incoming: !!S.settings.includeIncoming, free: true });
 let BMODE = 'build';
 function openBuilder(mode) { // mode 'wish' = Plan a deck to buy (any card in the game); anything else = build from my collection
   if (mode === 'wish' || mode === 'build') BMODE = mode; const wish = BMODE === 'wish', KEY = wish ? 'wish' : 'build';
   const o = Object.assign(BUILD_DEFAULT(), wish ? { what: 'deck', budget: '' } : {}, S.settings[KEY] || {}); o.wish = wish; if (wish && o.what === 'every') o.what = 'deck'; let q = '';
+  if (!o.metaV2) { o.meta = false; o.metaV2 = true; } // tournament decks are now optional, off unless you switch them on
   if (o.opp && o.opp !== 'any') { o.vs = { ...(o.vs || {}), [o.oppName || o.opp]: 'strong' }; } o.opp = 'any'; { const ren = { 'Fast aggro': 'Fast', Midrange: 'Mid', 'Control / ramp': 'Control' }, nv = {}; for (const k in (o.vs || {})) { const n = ren[k] || k; if (o.vs[k] === 'strong' && ['Fast', 'Mid', 'Control'].includes(n)) nv[n] = 'strong'; } o.vs = nv; } // older single "Playing against" choice
   const chip = (attr, val, on, label) => `<button class="chip ${on ? 'on' : ''}" data-${attr}="${esc(val)}">${esc(label)}</button>`;
   const cap = t => t[0].toUpperCase() + t.slice(1);
@@ -1137,7 +1138,7 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
   const halves = (cols, th, tune, lead, tuneB = tune) => { const X = o.split || 25, cp = t => t[0].toUpperCase() + t.slice(1);
     const A = autoBuild([cols[0]], o.incoming, o.free, [], X, th, { ...extra, fav, tune, lead, seed: v.seed }); if (!A.n) return A;
     const B = autoBuild([cols[1]], o.incoming, o.free, A.cards, 50 - X, th, { ...extra, budget: extra.budget ? Math.max(0.01, extra.budget - A.cost) : 0, fav, tune: tuneB, seed: v.seed }); // one budget shared by both halves
-    return { colour: cols, cards: [...A.cards, ...B.cards].sort(sortByCurve), n: A.n + B.n, halves: [A.cards, B.cards], sizes: [X, 50 - X], leads: A.leads,
+    return { pool: [...(A.pool || []), ...(B.pool || [])], colour: cols, cards: [...A.cards, ...B.cards].sort(sortByCurve), n: A.n + B.n, halves: [A.cards, B.cards], sizes: [X, 50 - X], leads: A.leads,
       notes: [...A.notes.map(x => cp(cols[0]) + ': ' + x), ...B.notes.map(x => cp(cols[1]) + ': ' + x)], buys: [...A.buys, ...B.buys], cost: A.cost + B.cost, upgrades: [] }; };
   const styleOk = m => o.style === 'auto' || m.style === o.style;
   const seen = new Set(), all = [];
@@ -1149,10 +1150,24 @@ function runBuilder(o, v = {}) { // v.seed / v.avoid: "Try something different"
     if (!lead && tune === tunes[0] && tuneB === undefined) for (const l of r.leads.slice(1)) for (const t2 of tunes) { jobs.push([cols, th, t2, l]); if (mix) for (const tb of tunes) if (tb !== t2) jobs.push([cols, th, t2, l, tb]); } // also try each other main pilot
     const sig = sigOf(r.cards); if (seen.has(sig) || (v.avoid && v.avoid.has(sig))) continue; seen.add(sig); r.sig = sig;
     const m = deckProfile(r.cards), sShare = seriesFn ? r.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
-    r.colours = cols; r.m = m; const pilots = r.cards.filter(e => info(e.num).type === 'Pilot').map(e => e.num), M = metaStats(); // share of copies that winners with these pilots also play
+    r.colours = cols; r.m = m; r.tune = tune; const pilots = r.cards.filter(e => info(e.num).type === 'Pilot').map(e => e.num), M = metaStats(); // share of copies that winners with these pilots also play
     r.fit = extra.meta && pilots.length ? r.cards.filter(e => e.num && (pilots.includes(e.num) || Math.max(0, ...pilots.map(p => M.given(p, e.num))) >= 0.1)).reduce((t, e) => t + e.qty, 0) / r.n : 0;
-    r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + 2 * sShare + (o.wish ? 8 : 4) * r.fit + (styleOk(m) ? 3 : 0); all.push(r); }
+    r.proven = extra.meta ? provenMatch(r.cards) : null; // how close it is to a real winning list
+    r.rank = (r.n === size ? 100 : r.n) + rateMulti(m, o.vs) + 2 * sShare + (o.wish ? 8 : 4) * r.fit + (o.wish ? 14 : 6) * (r.proven ? r.proven.sim : 0) + (styleOk(m) ? 3 : 0); all.push(r); }
   all.sort((a, b) => b.rank - a.rank);
+  { // the best drafts go through the swap search, then everything is ranked again on the finished decks
+    const oddFor = oddTest(), top = [], keys = new Set();
+    for (const r of all) { const k = r.colours.join() + '|' + (r.cards.find(e => info(e.num).type === 'Pilot')?.num || ''); if (keys.has(k) && top.length >= 3) continue; keys.add(k); top.push(r); if (top.length >= 6) break; }
+    const done = [], seen2 = new Set(v.avoid || []);
+    for (const r of top) {
+      const own = {}; for (const p of r.pool || []) own[p.num] = p.own;
+      const q = polish(r, { include: o.include, budget: o.wish || +o.budget > 0 ? extra.budget : 0, fixedColours: size === 50 && !o.anySplit && r.colours.length === 2, fav, tune: r.tune, meta: extra.meta, seed: v.seed, own, wish: o.wish, oddFor });
+      q.n = q.cards.reduce((t, e) => t + e.qty, 0); q.sig = sigOf(q.cards); if (seen2.has(q.sig)) continue; seen2.add(q.sig);
+      q.m = deckProfile(q.cards); const sShare = seriesFn ? q.cards.filter(e => seriesFn(info(e.num))).reduce((t, e) => t + e.qty, 0) / q.n : 0;
+      q.proven = extra.meta ? provenMatch(q.cards) : null;
+      q.rank = (q.n === size ? 100 : q.n) + rateMulti(q.m, o.vs) + 2 * sShare + 6 * (q.brain / q.n) + (styleOk(q.m) ? 3 : 0) + (extra.meta ? 6 * (q.proven ? q.proven.sim : 0) : 0);
+      done.push(q); }
+    if (done.length) { all.length = 0; all.push(...done.sort((a, b) => b.rank - a.rank)); } }
   if (o.free) for (const r of all) { // cards in these colours that your other cores are holding back
     const held = {}; for (const c of Object.values(S.cores)) if (c.status === 'built') for (const e of c.cards) { const i = info(e.num); if (r.colours.includes(i.colour) && !RESOURCE_TYPES.has(i.type)) held[e.num] = (held[e.num] || 0) + e.qty; }
     r.held = Object.keys(held).sort((a, b) => (RAR_SCORE[info(b).rarity] || 2) + fx(info(b)).value + (info(b).type === 'Pilot' || info(b).type === 'Base' ? 1 : 0) - (RAR_SCORE[info(a).rarity] || 2) - fx(info(a)).value - (info(a).type === 'Pilot' || info(a).type === 'Base' ? 1 : 0)); }
@@ -1203,7 +1218,7 @@ function showOptions(list, size, o, v = {}) {
         let run = 0; const L = r.buys.slice().sort((a, b) => val(b) - val(a)).map(b => { run += (b.usd || 0) * b.need; return [b, run]; });
         return `<div class="card" style="margin:8px 0"><b class="small">To buy · ${r.buys.reduce((t, b) => t + b.need, 0)} cards · about ${usd(r.cost)}</b> <span class="small muted">· best value first</span>
           <ol class="small" style="padding-left:20px;margin:6px 0">${L.map(([b, t]) => `<li>${esc(info(b.num).name)} <span class="muted">${esc(b.num)} · ${esc(setOf(b.num))}</span> ×${b.need}${b.usd ? ` · ${usd(b.usd)} each <span class="muted">(running ${usd(t)})</span>` : ''}</li>`).join('')}</ol></div>`; })() : '<p class="small ok">All from cards you own.</p>'}
-      ${r.notes.length ? `<ul class="small muted" style="padding-left:18px;margin:6px 0">${r.notes.slice(0, 4).map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+      ${brainHTML(r, size)}
       <div class="grid" style="margin-top:10px" id="opGrid">${r.cards.map(e => tileHTML({ num: e.num, qty: e.qty, need: Math.max(0, e.qty - playableByNum(e.num, o.incoming)), selected: marked.has(e.num) })).join('')}</div>
       ${oddBar(marked, r.cards)}
       <label class="f" for="opName">Name</label><input type="text" id="opName" value="${esc(name)}">
@@ -1281,6 +1296,180 @@ function fx(c) {
   f.value = Math.min(2.5, Math.min(2, f.removal) * (c.type === 'Command' ? 1.2 : 0.8) + f.draw * 0.5 + (f.blocker ? 0.4 : 0) + f.evasive * 0.5 + (f.repair ? 0.3 : 0)
     + (f.burst ? 0.3 : 0) + (f.token ? 0.6 : 0) + (f.shield ? 0.3 : 0) + (f.buff ? 0.2 : 0) + (f.selfdmg || f.payoff ? 0.2 : 0));
   return FX[c.num] = f;
+}
+/* =========================== DECK BRAIN: study cards, build from combinations =========================== */
+// 1. study(card): what each card GIVES (removal, damage to your own units, draw, blockers…) and what it NEEDS to work
+//    (a damaged unit, N cards of a trait in the trash, another trait unit in play, a Blocker…).
+// 2. deckScore(): every card's value in THIS deck — conditions count only as often as the deck can meet them,
+//    providers are worth more when the deck has cards that need them, pilots are worth their linked units.
+// 3. polish(): starting from a first draft, keep swapping one copy for another until no swap makes the deck better.
+// 4. testDraws(): deal the deck 1,000 times to check it plays smoothly.  5. explainDeck(): game plan + why each card is in.
+const STUDY = {};
+const GIVE_LABEL = { removal: 'Removal', rest: 'Rests enemies', draw: 'Card draw', blocker: 'Blocker', dmgOwn: 'Damages your own unit', buff: 'Power boost', evade: 'Hard to block', token: 'Makes tokens', shield: 'Shield to hand', trash: 'Fills your trash', recur: 'Uses your trash', repair: 'Repairs' };
+function study(c) {
+  if (!c || !c.num) return { g: {}, needs: [], traits: [] };
+  if (STUDY[c.num]) return STUDY[c.num];
+  const t = (c.text || '').replace(/\r/g, ''), g = {}, needs = [], add = (k, v = 1) => g[k] = (g[k] || 0) + v;
+  for (const l of t.split('\n')) {
+    const en = /enemy/i.test(l);
+    if (en && /(Deal \d+ damage|Destroy it|Return it to its owner's hand|AP-\d)/i.test(l)) add('removal');
+    if (en && /Rest (it|them)\b/i.test(l)) add('rest');
+    if (/(of your (other )?Units?|your Units? and 1 enemy)[^\n]*Deal \d+ damage/i.test(l)) add('dmgOwn');
+    const dr = l.match(/Draw (\d)/i); if (dr) add('draw', +dr[1]); if (/Look at the top/i.test(l)) add('draw', 0.5);
+    if (/AP\+\d/.test(l)) add('buff');
+    if (/\[Blocker\]/.test(l) && !/with \[Blocker\]/.test(l)) add('blocker');
+    if (/deploy 1 \[|token/i.test(l) && !/from your trash/i.test(l)) add('token');
+    if (/\bdiscard|into your trash|in your trash/i.test(l) && !/cards? in your trash/i.test(l)) add('trash');
+    if (/from your trash/i.test(l)) add('recur');
+    if (/Add 1 of your Shields to your hand/i.test(l)) add('shield');
+    if (/\[(High-Maneuver|Suppression|First Strike)/.test(l) || /\[Breach/.test(l) || /can't be blocked|unblockable/i.test(l)) add('evade');
+    if (/\[Repair/.test(l)) add('repair');
+    let m;
+    if (/damaged/i.test(l)) needs.push({ k: en && /enemy[^\n]*damaged|damaged enemy/i.test(l) ? 'enemyDamaged' : 'damaged', line: l });
+    if ((m = l.match(/(\d+) or more \(([^)]+)\) cards? in your trash/i))) needs.push({ k: 'traitTrash', x: `(${m[2]})`, n: +m[1], line: l });
+    else if ((m = l.match(/(\d+) or more cards? in your trash/i))) needs.push({ k: 'trashAny', n: +m[1], line: l });
+    if ((m = l.match(/(?:another|have an?|have (\d+) or more(?: other)?)\s*\(([^)]+)\)[^\n]*?(Link )?Units? in play/i))) needs.push({ k: m[3] ? 'traitLink' : 'traitPlay', x: `(${m[2]})`, n: +(m[1] || 1), line: l });
+    if (/friendly Unit with \[Blocker\]|Unit with \[Blocker\]/i.test(l) && en) needs.push({ k: 'blockerOwn', line: l });
+    if (/rested enemy/i.test(l)) needs.push({ k: 'enemyRested', line: l });
+  }
+  return STUDY[c.num] = { g, needs, traits: (c.trait || '').match(/\([^)]+\)/g) || [] };
+}
+// what the deck as a whole provides / needs
+function deckContext(qty) {
+  const D = { g: {}, trait: {}, traitUnits: {}, cons: {}, consTrait: {}, pilots: [], n: 0 };
+  for (const [num, q] of Object.entries(qty)) { if (!q) continue; const c = info(num), s = study(c); D.n += q;
+    for (const [k, v] of Object.entries(s.g)) D.g[k] = (D.g[k] || 0) + q * Math.min(2, v);
+    for (const tr of s.traits) { D.trait[tr] = (D.trait[tr] || 0) + q; if (c.type === 'Unit') D.traitUnits[tr] = (D.traitUnits[tr] || 0) + q; }
+    for (const nd of s.needs) { D.cons[nd.k] = (D.cons[nd.k] || 0) + q; if (nd.x) D.consTrait[nd.x] = (D.consTrait[nd.x] || 0) + q; }
+    if (c.type === 'Pilot') D.pilots.push([c, q]); if (c.type === 'Base' || c.type === 'Command') D.g.blocker = D.g.blocker || 0; }
+  return D;
+}
+const clamp01 = x => Math.max(0, Math.min(1, x));
+function needMet(nd, D, c, q) { // 0–1: how often this condition will be met in this deck
+  const k50 = 50 / Math.max(25, D.n);
+  switch (nd.k) {
+    case 'damaged': return 0.35 + 0.65 * clamp01((D.g.dmgOwn || 0) * k50 / 8);
+    case 'enemyDamaged': return 0.3 + 0.7 * clamp01((D.g.removal || 0) * k50 / 8);
+    case 'traitTrash': return clamp01(((D.trait[nd.x] || 0) * k50 + 1.5 * (D.g.trash || 0)) / (nd.n * 3.2));
+    case 'trashAny': return clamp01(0.5 + (D.g.trash || 0) / 8);
+    case 'traitPlay': return clamp01(((D.traitUnits[nd.x] || 0) - (study(c).traits.includes(nd.x) && c.type === 'Unit' ? q : 0)) * k50 / (6 * nd.n));
+    case 'traitLink': { let L = 0; for (const [p] of D.pilots) L += 1; return clamp01((D.traitUnits[nd.x] || 0) * k50 / 10) * (L ? 1 : 0.2); }
+    case 'blockerOwn': return clamp01((D.g.blocker || 0) * k50 / 8);
+    case 'enemyRested': return clamp01(0.3 + (D.g.rest || 0) * k50 / 6);
+  }
+  return 1;
+}
+function cardValue(c, q, D, qty, ctx) { // one copy of this card, in this deck
+  const s = study(c); let v = 0;
+  if (c.type === 'Unit' && c.ap != null) v += 0.8 * Math.max(-1.5, Math.min(1.5, ((c.ap + c.hp) - 2 * expStat(c.lv)) / 2)) + ((c.lv ?? 0) >= 6 ? 0.2 : 0);
+  const met = s.needs.length ? Math.min(...s.needs.map(nd => needMet(nd, D, c, q))) : 1;
+  v += fx(c).value * (s.needs.length ? 0.3 + 0.7 * met : 1);
+  if (c.type === 'Unit' && c.link) v += D.pilots.some(([p]) => linksTo(c, p)) ? 0.9 : -0.4;
+  if (c.type === 'Pilot') { const L = Object.entries(qty).reduce((t, [n, k]) => t + (k && linksTo(info(n), c) ? k : 0), 0); v += Math.min(1.6, L / 6) - (L < 4 ? 1.4 : 0); }
+  for (const k of Object.keys(s.g)) { const need = { dmgOwn: 'damaged', removal: 'enemyDamaged', blocker: 'blockerOwn', rest: 'enemyRested', trash: 'trashAny' }[k]; if (need && D.cons[need]) v += 0.6 * clamp01(D.cons[need] / 8); }
+  for (const tr of s.traits) if (D.consTrait[tr]) v += 0.35 * clamp01(D.consTrait[tr] / 6);
+  v += 0.15 * ((RAR_SCORE[(c.rarity || '').replace(/\+/g, '')] || 2) - 2);
+  if (c.vanilla) v -= 0.3;
+  if (ctx.fav && ctx.fav(c)) v += 0.3;
+  if (ctx.tune) v += 0.5 * tuneScore(c, ctx.tune);
+  if (ctx.meta) v += Math.sqrt(metaStats().rate(c.num));
+  if (ctx.seed) v += 0.6 * jitter(c.num, ctx.seed);
+  if (ctx.own && ctx.own[c.num] != null && ctx.wish) v -= 0.05; // owned cards win ties
+  if (ctx.oddFor && ctx.oddFor(c.num, D)) v -= 4;
+  return v;
+}
+function deckScore(qty, ctx) {
+  const D = deckContext(qty); let tot = 0, ones = 0, twos = 0;
+  for (const [num, q] of Object.entries(qty)) { if (!q) continue; tot += q * cardValue(info(num), q, D, qty, ctx); if (q === 1) ones++; else if (q === 2) twos++; }
+  const sh = deckShape(Object.entries(qty).filter(([, q]) => q).map(([num, q]) => ({ num, qty: q }))), k = D.n / 50;
+  let pen = 0; for (const key of ['units', 'pilots', 'commands', 'bases', 'early']) { const [lo, hi] = SHAPE[key]; pen += Math.max(0, Math.floor(lo * k) - sh[key], sh[key] - Math.ceil(hi * k)); }
+  const low = Object.entries(qty).reduce((t, [n, q]) => t + (q && info(n).type === 'Unit' && (info(n).lv ?? 9) <= 2 ? q : 0), 0); pen += 1.5 * Math.max(0, Math.round(8 * k) - low); // something to play on turns 1–2
+  return tot - 0.9 * pen - 1.2 * ones - 0.35 * twos;
+}
+// swap copies until no swap improves the deck — keeps every rule, the colour split, your must-haves and the budget
+function polish(r, ctx) {
+  const pool = {}; for (const p of r.pool || []) pool[p.num] = p;
+  const qty = {}; for (const e of r.cards) qty[e.num] = e.qty; if (!Object.keys(pool).length) return r;
+  const inc = ctx.include || {}, cap = n => Math.min(pool[n] ? pool[n].avail : 0, RULES.restricted[n] || 4);
+  const cost = q => Object.entries(q).reduce((t, [n, k]) => t + Math.max(0, k - (pool[n]?.own ?? 0)) * (pool[n]?.usd || 0), 0);
+  const startCost = cost(qty), budget = ctx.budget ? Math.max(ctx.budget, startCost) : 0;
+  const legalSwap = (x, y) => { // removing one x, adding one y
+    if ((qty[y] || 0) + 1 > cap(y) || (inc[x] && qty[x] - 1 < inc[x])) return false;
+    if (ctx.fixedColours && info(x).colour !== info(y).colour) return false;
+    if (info(y).vanilla && !qty[y] && Object.keys(qty).some(n => qty[n] && n !== x && info(n).vanilla)) return false;
+    if (RULES.bannedPairs.some(([a, b]) => (y === a && qty[b]) || (y === b && qty[a]))) return false;
+    return true; };
+  const st = n => { const c = info(n); return fx(c).value + (c.type === 'Unit' && c.ap != null ? ((c.ap + c.hp) - 2 * expStat(c.lv)) / 3 : 0) + (c.link ? 0.3 : 0) + study(c).traits.length * 0.1; };
+  const deckTraits = new Set(Object.keys(qty).flatMap(n => study(info(n)).traits));
+  let cand = Object.keys(pool).sort((a, b) => st(b) - st(a)).slice(0, 40);
+  cand = [...new Set([...cand, ...Object.keys(pool).filter(n => study(info(n)).traits.some(t => deckTraits.has(t)) || info(n).type === 'Pilot').slice(0, 40), ...Object.keys(qty)])];
+  let best = deckScore(qty, ctx), moves = 0;
+  for (let pass = 0; pass < 12 && moves < 60; pass++) {
+    let improved = false;
+    for (const x of Object.keys(qty)) { if (!qty[x]) continue;
+      for (const y of cand) { if (y === x || !qty[x] || !legalSwap(x, y)) continue;
+        qty[x]--; qty[y] = (qty[y] || 0) + 1;
+        const ok = !budget || cost(qty) <= budget + 0.001, s = ok ? deckScore(qty, ctx) : -1e9;
+        if (s > best + 0.01) { best = s; improved = true; moves++; } else { qty[y]--; qty[x]++; } } }
+    if (!improved) break; }
+  const cards = Object.entries(qty).filter(([, q]) => q > 0).map(([num, q]) => ({ num, qty: q })).sort(sortByCurve);
+  const buys = cards.map(e => ({ num: e.num, need: Math.max(0, e.qty - (pool[e.num]?.own ?? 0)), usd: info(e.num).usd })).filter(b => b.need > 0);
+  const out = { ...r, cards, buys, cost: buys.reduce((t, b) => t + b.need * (b.usd || 0), 0), brain: best, swaps: moves, notes: (r.notes || []).filter(n => /^Only \d+ cards|short/i.test(n)) };
+  if (r.halves) out.halves = r.colour.map(col => cards.filter(e => info(e.num).colour === col));
+  return out;
+}
+// deal the deck 1,000 times: playable units early, pilot + linked unit, engine pieces together, cards you can't use yet
+function testDraws(cards, N = 1000) {
+  const deck = cards.flatMap(e => Array(e.qty).fill(e.num)), n = deck.length; if (n < 20) return null;
+  const D = deckContext(Object.fromEntries(cards.map(e => [e.num, e.qty])));
+  const mainNeed = Object.entries(D.cons).sort((a, b) => b[1] - a[1])[0];
+  const provOf = { damaged: 'dmgOwn', enemyDamaged: 'removal', blockerOwn: 'blocker', enemyRested: 'rest' }[mainNeed?.[0]];
+  let seed = 12345; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  let t2 = 0, t3 = 0, pil = 0, eng = 0, stuck = 0; const hasPilots = cards.some(e => info(e.num).type === 'Pilot');
+  for (let g = 0; g < N; g++) {
+    const d = deck.slice(); for (let i = n - 1; i > 0; i--) { const j = rnd() * (i + 1) | 0; [d[i], d[j]] = [d[j], d[i]]; }
+    const seen = k => d.slice(0, 5 + Math.max(0, k - 1)); // 5-card hand, then 1 draw a turn
+    const unitBy = k => seen(k).some(x => { const c = info(x); return c.type === 'Unit' && (c.lv ?? 9) <= k; });
+    if (unitBy(2) || unitBy(1)) t2++; if (unitBy(3)) t3++;
+    const s4 = seen(4).map(info);
+    if (hasPilots && s4.some(p => p.type === 'Pilot' && s4.some(u => linksTo(u, p)))) pil++;
+    if (mainNeed && provOf) { const s5 = seen(5).map(x => [info(x), study(info(x))]); if (s5.some(([, s]) => s.needs.some(nd => nd.k === mainNeed[0])) && s5.some(([, s]) => s.g[provOf])) eng++; }
+    stuck += s4.filter(c => (c.type === 'Unit' && (c.lv ?? 9) > 4) || (c.type === 'Pilot' && !s4.some(u => linksTo(u, c)))).length; }
+  return { t2: t2 / N, t3: t3 / N, pilot: hasPilots ? pil / N : null, engine: mainNeed && provOf ? eng / N : null, engineName: mainNeed?.[0], stuck: stuck / N };
+}
+const NEED_TEXT = { damaged: 'one of your units to be damaged', enemyDamaged: 'a damaged enemy', traitTrash: 'cards in your trash', trashAny: 'cards in your trash', traitPlay: 'another unit in play', traitLink: 'a linked unit in play', blockerOwn: 'a Blocker in battle', enemyRested: 'a rested enemy' };
+function explainDeck(cards) {
+  const qty = Object.fromEntries(cards.map(e => [e.num, e.qty])), D = deckContext(qty), names = f => [...new Set(cards.filter(e => f(info(e.num))).map(e => info(e.num).name))];
+  const rows = cards.map(e => { const c = info(e.num), s = study(c), tags = [];
+    if (c.type === 'Unit') tags.push((c.lv ?? 0) <= 3 ? 'Early unit' : (c.lv ?? 0) >= 6 ? 'Finisher' : 'Mid unit');
+    if (c.type === 'Pilot') { const L = names(u => linksTo(u, c)); tags.push(L.length ? 'Pilot for ' + L.join(', ') : 'Pilot — nothing links to it'); }
+    if (c.type === 'Unit' && c.link) { const P = D.pilots.filter(([p]) => linksTo(c, p)).map(([p]) => p.name); tags.push(P.length ? 'Links with ' + [...new Set(P)].join(', ') : 'Its link pilot (' + c.link + ') isn’t in the deck'); }
+    for (const k of Object.keys(s.g)) if (GIVE_LABEL[k]) tags.push(GIVE_LABEL[k]);
+    if (c.type === 'Base') tags.push('Base');
+    const flags = s.needs.map(nd => { const m = needMet(nd, D, c, e.qty); const what = nd.k === 'traitTrash' ? `${nd.n}+ ${nd.x} cards in your trash` : nd.k === 'traitPlay' ? `another ${nd.x} unit in play` : nd.k === 'traitLink' ? `a ${nd.x} Link Unit in play` : NEED_TEXT[nd.k];
+      return [m, `Needs ${what} — ${m >= 0.75 ? 'usually met' : m >= 0.45 ? 'met some games' : 'rarely met in this deck'}`]; });
+    const helpers = s.needs.flatMap(nd => names(x => { const t = study(x); return x.num !== c.num && (nd.k === 'damaged' ? t.g.dmgOwn : nd.k === 'enemyDamaged' ? t.g.removal : nd.k === 'blockerOwn' ? t.g.blocker : nd.k === 'enemyRested' ? t.g.rest : (nd.x && t.traits.includes(nd.x) && (nd.k !== 'traitPlay' || x.type === 'Unit'))); })).slice(0, 3);
+    const feeds = names(x => x.num !== c.num && study(x).needs.some(nd => (nd.k === 'damaged' && s.g.dmgOwn) || (nd.k === 'enemyDamaged' && s.g.removal) || (nd.k === 'blockerOwn' && s.g.blocker) || (nd.k === 'enemyRested' && s.g.rest) || (nd.x && s.traits.includes(nd.x)))).slice(0, 3);
+    return { num: e.num, qty: e.qty, name: c.name, tags: [...new Set(tags)], flags, helpers: [...new Set(helpers)], feeds }; });
+  const m = deckProfile(cards), engineMakers = names(x => study(x).g.dmgOwn), payoffs = names(x => study(x).needs.some(nd => nd.k === 'damaged'));
+  const removal = names(x => study(x).g.removal), blockers = names(x => study(x).g.blocker), finish = names(x => x.type === 'Unit' && (x.lv ?? 0) >= 6);
+  const pilots = D.pilots.map(([p]) => p.name), bits = [`${m.style}.`];
+  if (engineMakers.length && payoffs.length) bits.push(`Damage your own units with ${engineMakers.slice(0, 3).join(', ')} to power up ${payoffs.slice(0, 3).join(', ')}.`);
+  if (pilots.length) bits.push(`Pair ${[...new Set(pilots)].slice(0, 2).join(' and ')} with their linked units.`);
+  if (removal.length) bits.push(`Clear the way with ${removal.slice(0, 3).join(', ')}.`);
+  if (blockers.length) bits.push(`Hold the line with ${blockers.slice(0, 2).join(', ')}.`);
+  if (finish.length) bits.push(`Finish with ${finish.slice(0, 2).join(', ')}.`);
+  return { plan: bits.join(' '), rows };
+}
+function brainHTML(r, size) {
+  const ex = explainDeck(r.cards), td = testDraws(r.cards), pct = x => Math.round(x * 100) + '%', ok = (x, a, b) => x >= a ? 'ok' : x >= b ? '' : 'warn';
+  const weak = ex.rows.filter(w => w.flags.some(f => f[0] < 0.45));
+  return `<div class="card" style="margin:8px 0"><b class="small">Game plan</b><div class="small">${esc(ex.plan)}</div>
+    ${td ? `<div class="small" style="margin-top:6px"><b>Test draws</b> <span class="muted">(dealt 1,000 times)</span> · unit to play by turn 2 <b class="${ok(td.t2, .85, .7)}">${pct(td.t2)}</b> · by turn 3 <b class="${ok(td.t3, .95, .85)}">${pct(td.t3)}</b>${td.pilot != null ? ` · pilot + its unit by turn 4 <b class="${ok(td.pilot, .6, .4)}">${pct(td.pilot)}</b>` : ''}${td.engine != null ? ` · combo pieces together by turn 5 <b class="${ok(td.engine, .6, .4)}">${pct(td.engine)}</b>` : ''} · stuck cards in hand on turn 4 <b class="${td.stuck <= 1 ? 'ok' : td.stuck <= 1.6 ? '' : 'warn'}">${td.stuck.toFixed(1)}</b></div>` : ''}
+    ${weak.length ? `<div class="small warn" style="margin-top:6px">${weak.map(w => `${esc(w.name)}: ${esc(w.flags.find(f => f[0] < 0.45)[1].toLowerCase())}`).join('<br>')}</div>` : ''}
+    <details style="margin-top:6px"><summary class="small">Why each card is in</summary><div class="list">${ex.rows.map(w => `<div class="li" style="display:block;padding:6px 0"><div class="small"><b>${w.qty}× ${esc(w.name)}</b> <span class="muted">${esc(w.tags.join(' · '))}</span></div>
+      ${w.helpers.length ? `<div class="small muted">Made to work by: ${esc(w.helpers.join(', '))}</div>` : ''}${w.feeds.length ? `<div class="small muted">Helps: ${esc(w.feeds.join(', '))}</div>` : ''}
+      ${w.flags.map(f => `<div class="small ${f[0] >= 0.75 ? 'ok' : f[0] >= 0.45 ? 'muted' : 'warn'}">${esc(f[1])}</div>`).join('')}</div>`).join('')}</div></details></div>`;
 }
 function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = null, opts = {}) { // other = the deck's other half; colour may be a list of colours; size 25 (core) or 50 (whole deck)
   // opts: lock = Set of card numbers already used by another core · noVanilla = leave out plain 2/2s · fav = card → favourite series? · tune = 'fast' | 'tough' | 'power' (to beat aggro / control / midrange) · skipSmart = ignore smart-built cores
@@ -1409,7 +1598,7 @@ function autoBuild(colour, incoming, avoidUsed, other = [], size = 25, theme = n
   const leads = ranked.slice(0, 4).map(p => p.num); // other pilots worth trying as the main one
   const buys = cards.map(e => ({ num: e.num, need: Math.max(0, e.qty - (ownM[e.num] ?? 0)), usd: info(e.num).usd })).filter(b => b.need > 0);
   const cost = buys.reduce((t, b) => t + b.need * (b.usd || 0), 0);
-  return { colour, cards, n, strength, avg, notes, buys, cost, leads, linkedCopies, unitCopies, offFaction, upgrades, poolSize: pool.reduce((s, c) => s + c.avail, 0) };
+  return { pool, colour, cards, n, strength, avg, notes, buys, cost, leads, linkedCopies, unitCopies, offFaction, upgrades, poolSize: pool.reduce((s, c) => s + c.avail, 0) };
 }
 // A full 50-card deck: the best 50 cards from up to two colours (not tied to 25 + 25)
 function autoDeck(c1, c2, incoming, avoidUsed, theme = null, opts = {}) {
@@ -1479,6 +1668,13 @@ async function updateMetaDecks(progress) {
   if (!decks.length) throw new Error('no decks');
   S.meta = { updated: today(), source: 'Limitless TCG', decks }; METALIST = S.meta; MSTAT = null; CUTS = null; BASE = null; save(); return decks.length;
 }
+function provenMatch(cards) { // the winning deck this build shares the most cards with (copies in common / deck size)
+  const n = cards.reduce((t, e) => t + e.qty, 0) || 1, mine = Object.fromEntries(cards.map(e => [e.num, e.qty])); let best = null;
+  for (const d of METALIST.decks || []) { let k = 0; for (const [num, q] of d.cards) if (mine[num]) k += Math.min(q, mine[num]);
+    const sim = k / Math.max(n, 50) * (d.place === 1 ? 1 : d.place <= 2 ? 0.95 : d.place <= 4 ? 0.9 : 0.8);
+    if (!best || sim > best.sim) best = { sim, d }; }
+  return best;
+}
 function metaGuide(r) { // what the winning decks say about this build
   const M = metaStats(); if (!M.n) return '';
   const copies = r.cards.reduce((t, e) => t + e.qty, 0), inMeta = r.cards.filter(e => M.rate(e.num) > 0.02).reduce((t, e) => t + e.qty, 0);
@@ -1487,6 +1683,7 @@ function metaGuide(r) { // what the winning decks say about this build
     .map(c => [c, Math.max(0, ...pilots.map(p => M.given(p, c.num)))]).filter(x => x[1] >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 4);
   return `<div class="card" style="margin:8px 0"><b class="small">Tournament guide</b> <span class="small muted">· ${M.n} winning decks</span>
     <div class="small muted">${inMeta} of ${copies} cards here also show up in winning decks.</div>
+    ${(() => { const p = r.proven || provenMatch(r.cards); return p && p.sim >= 0.3 ? `<div class="small">Closest winning list: <b>${p.d.place === 1 ? '1st' : p.d.place === 2 ? '2nd' : p.d.place === 3 ? '3rd' : p.d.place + 'th'}</b> at ${esc(p.d.event)} (${esc(fmtDate(p.d.date))}, ${p.d.players} players) — ${Math.round(p.sim * 100)}% the same cards</div>` : '<div class="small muted">Not close to any recent winning list.</div>'; })()}
     ${tips.length ? `<div class="small">Winners with these pilots also play: ${tips.map(([c, g]) => `<b>${esc(c.name)}</b> <span class="muted">${esc(c.num)} · ${Math.round(g * 100)}% · own ${playableByNum(c.num, true)}${c.usd ? ` · ~${usd(c.usd)}` : ''}</span>`).join('; ')}</div>` : ''}</div>`;
 }
 /* =========================== SMART BUILDER =========================== */
@@ -1596,8 +1793,12 @@ function bestCore(col, caps, incoming, o, seed = 0, avoid = null, partial = fals
     const m = deckProfile(r.cards), favShare = fav ? r.cards.filter(e => fav(info(e.num))).reduce((t, e) => t + e.qty, 0) / r.n : 0;
     const sc = (o.rate ? o.rate(m) : o.opp ? rateVs(m, o.opp) : m.power + 0.15 * (m.vs.Aggro + m.vs.Midrange + m.vs.Control)) + 0.8 * favShare + (r.n - 25) * 0.4;
     if (!top || sc > top.sc) top = { r, m, sc, col }; }
+  if (top) { const own = {}; for (const p of top.r.pool || []) own[p.num] = p.own;
+    const q = polish(top.r, { budget: 0, fav, meta: extra.meta, seed, own, oddFor: oddTest() }); q.n = q.cards.reduce((t, e) => t + e.qty, 0);
+    if (!(avoid && avoid.has(sigOf(q.cards)))) { top.r = q; top.m = deckProfile(q.cards); } }
   return top;
 }
+function oddTest() { const odd = S.settings.odd || {}; return (num, D) => (odd._any || []).includes(num) || D.pilots.some(([p]) => (odd[p.num] || []).includes(num)); }
 const mainPilot = cards => cards.filter(e => info(e.num).type === 'Pilot').sort((a, b) => b.qty - a.qty)[0]?.num || '';
 function rememberOdd(cards, nums) { // saved against the main pilot of the card's own colour (the side it was meant to fit)
   S.settings.odd = S.settings.odd || {};
@@ -1729,7 +1930,7 @@ function openDeckFinder() {
     <button class="btn ghost" id="dfFresh" style="width:100%;margin-top:12px">Or build a fresh 50 to beat them</button>
     <p class="small muted">Card effects aren't in the card list, so this judges by stats for the level, pilot links, faction, 4-ofs, deck shape and speed. Treat it as a strong starting point, then test it.</p>`, () => {
     $('#dfOpp').onchange = e => { opp = e.target.value; S.settings.opp = opp; save(); draw(); };
-    $('#dfFresh').onclick = () => { const [st, nm] = opp.split('|'); S.settings.build = { ...(S.settings.build || {}), what: 'deck', opp: 'any', vs: st === 'any' ? {} : { [nm]: 'strong' } }; save(); openBuilder(); };
+    $('#dfFresh').onclick = () => { const [st, nm] = opp.split('|'); S.settings.build = { ...(S.settings.build || {}), what: 'deck', opp: 'any', vs: st === 'any' ? {} : { [nm]: 'strong' } }; save(); openBuilder('build'); };
     draw();
   });
 }
@@ -2023,7 +2224,7 @@ function renderMore() {
     <p class="small muted">${Object.keys(CATALOG).length} cards known (${SEED.length} from the card list, ${Object.keys(S.learned).length} added or edited by you). New sets: ask Claude for an updated catalog.json.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn ghost sm" style="display:inline-flex;align-items:center">Load card list file<input type="file" accept=".json,application/json" id="cl" hidden></label><button class="btn ghost sm" id="clx">Export card list</button></div>
     <h2>About</h2>
-    <p class="small muted">GTCG My Card Collection · version 1.36 (series stays the series) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
+    <p class="small muted">GTCG My Card Collection · version 1.38 (card study builder) · everything is stored on this phone only. Ban list: ${RULES.listDate}. Not affiliated with Bandai.</p>
     <button class="btn danger sm" id="wipe" style="margin-top:6px">Delete everything</button>
   </div>`;
   bindActs($('#app')); hydrateImages($('#app'));
